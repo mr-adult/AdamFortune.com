@@ -1,4 +1,4 @@
-use std::{sync::{RwLock, Arc}, time::Duration, fs::OpenOptions, io::{Write, Read}};
+use std::{sync::RwLock, time::Duration, fs::OpenOptions, io::{Write, Read}};
 
 use base64::Engine;
 use chrono::{Utc, DateTime};
@@ -14,7 +14,7 @@ lazy_static!{
     static ref CACHE: RwLock<GithubData> = RwLock::new(GithubData::default());
 }
 
-pub (crate) async fn get_data() -> Result<Arc<Vec<Repo>>, ()> {
+pub (crate) async fn get_data() -> Result<GithubData, ()> {
     let mut out_of_date = false;
     {
         let index = CACHE.read().unwrap();
@@ -30,7 +30,7 @@ pub (crate) async fn get_data() -> Result<Arc<Vec<Repo>>, ()> {
             fetch_github_repos().await?
         }
     }
-    Ok(CACHE.read().unwrap().content.clone())
+    Ok(CACHE.read().unwrap().clone())
 }
 
 async fn fetch_github_repos() -> Result<(), ()> {
@@ -81,13 +81,31 @@ async fn fetch_github_repos() -> Result<(), ()> {
     };
 
     for repo in repos.iter_mut() {
-        repo.readme = get_read_me(repo, &client).await;
+        if repo.name == "blog-posts" {
+            if let Some(posts) = get_all_md_files(repo, &client).await {
+                let mut results = Vec::new();
+                for post in posts {
+                    if post.file_name == "Home.md" {
+                        CACHE.write().unwrap().home = post;
+                    } else {
+                        results.push(post);
+                    }
+                }
+                CACHE.write().unwrap().blog_posts = results;
+            } else {
+                crate::utils::log_error("Failed to load blog posts".to_string());
+            }
+        } else {
+            repo.readme = get_read_me(repo, &client).await;
+        }
     }
-    
+    // blog-posts is special. Don't show it as an actual repo.
+    repos = repos.into_iter().filter(|repo| repo.name != "blog-posts").collect();
+
     {
         let mut index_write = CACHE.write().unwrap();
         if index_write.last_updated < Utc::now() - chrono::Duration::hours(1) {
-            index_write.content = Arc::new(repos);
+            index_write.repos = repos;
             index_write.last_updated = Utc::now();
         }
     }
@@ -100,16 +118,19 @@ async fn fetch_github_repos() -> Result<(), ()> {
 }
 
 async fn get_read_me(repo: &Repo, client: &Client) -> Option<String> {
-    let readme_filename = "README.md";
+    get_file_content(repo, client, "README.md").await
+}
+
+async fn get_file_content(repo: &Repo, client: &Client, path: &str) -> Option<String> {
     let mut get_repo_content_url = URL.to_owned();
-    get_repo_content_url.push_str(&format!("repos/{}/{}/contents/{}", USERNAME, &repo.name, readme_filename));
+    get_repo_content_url.push_str(&format!("repos/{}/{}/contents/{}", USERNAME, &repo.name, path));
 
     let response = client
         .get(&get_repo_content_url)
         .query(&[
             ("owner", USERNAME),
             ("repo", &repo.name),
-            ("path", readme_filename)
+            ("path", path)
         ])
         .send()
         .await;
@@ -142,6 +163,52 @@ async fn get_read_me(repo: &Repo, client: &Client) -> Option<String> {
                     Some(String::from_utf8_lossy(str.as_slice()).to_string())
                 }
             }
+        }
+    }
+}
+
+async fn get_all_md_files(repo: &Repo, client: &Client) -> Option<Vec<BlogPost>> {
+    let mut get_repo_content_url = URL.to_owned();
+    get_repo_content_url.push_str(&format!("repos/{}/{}/contents/", USERNAME, &repo.name));
+
+    let response = client
+        .get(&get_repo_content_url)
+        .query(&[
+            ("owner", USERNAME),
+            ("repo", &repo.name),
+        ])
+        .send()
+        .await;
+
+    let response = match response {
+        Err(_) => return None,
+        Ok(inner) => inner,
+    };
+    
+    let files: Result<Vec<FileMetadata>, _> = response
+        .json()
+        .await;
+    
+    match files {
+        Err(err) => {
+            println!("{:?}", err);
+            None
+        }
+        Ok(files) => {
+            let mut file_contents = Vec::new();
+            for file in files.into_iter().filter(|file| file.path.ends_with(".md")) {
+                let content = get_file_content(repo, client, &file.path).await;
+                match content {
+                    None => continue,
+                    Some(content) => {
+                        file_contents.push(BlogPost { 
+                                file_name: file.name, 
+                                content: content 
+                            });
+                    }
+                }
+            }
+            Some(file_contents)
         }
     }
 }
@@ -207,17 +274,34 @@ fn flush_data_to_file() {
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
-struct GithubData {
+pub (crate) struct GithubData {
     last_updated: DateTime<Utc>,
-    content: Arc<Vec<Repo>>,
+    pub (crate) repos: Vec<Repo>,
+    pub (crate) home: BlogPost,
+    pub (crate) blog_posts: Vec<BlogPost>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub (crate) struct Repo {
     pub (crate) name: String,
     pub (crate) url: String,
+    pub (crate) html_url: String,
+    pub (crate) description: String,
     pub (crate) updated_at: DateTime<Utc>,
     pub (crate) readme: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub (crate) struct BlogPost {
+    pub (crate) file_name: String,
+    pub (crate) content: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub (crate) struct FileMetadata {
+    sha: String,
+    name: String,
+    path: String,
 }
 
 #[derive(Deserialize, Serialize)]
