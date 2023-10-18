@@ -3,6 +3,7 @@ use axum::{
     response::Html, 
     routing::get, extract::Path
 };
+use github::{Repo, BlogPost};
 use pulldown_cmark::{
     Options, 
     Parser, 
@@ -69,9 +70,15 @@ const CONTENT_LIST_CSS: &'static str = r#"
 li {
     list-style: none;
 }
+li:not(#navbar li) {
+    border: 1px solid #FFFFFF;
+    padding: 20px;
+    border-radius: 20px;
+}
 "#;
 
 const MARKDOWN_CSS: &'static str = r#"
+
 "#;
 
 #[tokio::main]
@@ -80,7 +87,8 @@ async fn main() {
         .route("/", get(index))
         .route("/projects", get(projects))
         .route("/projects/:project", get(project))
-        .route("/blog", get(blog));
+        .route("/blog", get(blog))
+        .route("/blog/:blog", get(blog_post));
 
     // run it with hyper on localhost:3000
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
@@ -119,24 +127,12 @@ async fn projects() -> Html<String> {
             html.push_str("<body onLoad='onLoad()'>"); {
                 html.push_str(&create_nav_bar(None));
 
-                html.push_str("<ul>");
-                for repo in data.repos {
-                    html.push_str("<li>"); {
-                        html.push_str("<h2>"); {
-                            html.push_str(&format!("<a href='{}/projects/{}'>", INDEX_URL, get_url_safe_name(&repo.name))); {
-                                html.push_str(&repo.name);
-                            }
-                            html.push_str("</a>");
-                        }
-                        html.push_str("</h2>");
-
-                        html.push_str("<p>"); {
-                            html.push_str(&repo.description);
-                        }
-                        html.push_str("</p>");
-                    }
-                    html.push_str("</li>");
+                html.push_str("<ul style='display: grid;column-count: 2;column-gap: 20px;row-gap: 20px; margin-right: 30px'>");
+                
+                for (i, repo) in data.repos.iter().enumerate() {
+                    html.push_str(&generate_repo_card(i, repo));
                 }
+
                 html.push_str("</ul>");
             }
             html.push_str("</body>");
@@ -154,7 +150,24 @@ async fn project(Path(project): Path<String>) -> Result<Html<String>, StatusCode
                 Some(repo) => {
                     let mut html = create_html_page(false);
                     html.push_str("<body onLoad='onLoad()'>");
-                    html.push_str(&create_nav_bar(Some(&repo.html_url)));
+                    let mut additional_nav_bar_elements = 
+                        vec![
+                            NavBarElement { 
+                                display_text: "Source Code".to_string(), 
+                                href: repo.html_url 
+                            }
+                        ];
+
+                    if repo.name == "tree-iterators-rs" {
+                        additional_nav_bar_elements.push(
+                            NavBarElement { 
+                                display_text: "Crates.io".to_string(), 
+                                href: "https://crates.io/crates/tree_iterators_rs".to_string() 
+                            }
+                        )   
+                    }
+
+                    html.push_str(&create_nav_bar(Some(additional_nav_bar_elements)));
                     match repo.readme {
                         None => {
                             html.push_str("</body>");
@@ -176,12 +189,46 @@ async fn project(Path(project): Path<String>) -> Result<Html<String>, StatusCode
 }
 
 async fn blog() -> Html<String> {
-    let mut html = create_html_page(true);
-    html.push_str("<body onLoad='onLoad()'>"); {
-        html.push_str(&create_nav_bar(None));
+    match github::get_data().await {
+        Err(_) => Html(ERROR_RESPONSE.to_string()),
+        Ok(data) => {
+            let mut html = create_html_page(true);
+            html.push_str("<body onLoad='onLoad()'>"); {
+                html.push_str(&create_nav_bar(None));
+
+                html.push_str("<ul style='display: grid;column-count: 2;column-gap: 20px;row-gap: 20px; margin-right: 30px'>");
+                
+                for (i, blog_post) in data.blog_posts.iter().enumerate() {
+                    html.push_str(&generate_blog_card(i, blog_post));
+                }
+
+                html.push_str("</ul>");
+            }
+            html.push_str("</body>");
+            Html(html)
+        }
     }
-    html.push_str("</body>");
-    Html(html)
+}
+
+async fn blog_post(Path(post): Path<String>) -> Result<Html<String>, StatusCode> {
+    match github::get_data().await {
+        Err(_) => Ok(Html(ERROR_RESPONSE.to_string())),
+        Ok(data) => {
+            match data.blog_posts.into_iter().find(|blog_post| get_url_safe_name(&post) == get_url_safe_name(&blog_post.name)) {
+                None => Err(StatusCode::NOT_FOUND),
+                Some(blog_post) => {
+                    let mut html = create_html_page(false);
+                    html.push_str("<body onLoad='onLoad()'>");
+                    html.push_str("<div>"); {
+                        html.push_str(&parse_md_to_html(&blog_post.content));
+                    }
+                    html.push_str("</div>");
+                    html.push_str("</body>");
+                    Ok(Html(html))
+                }
+            }
+        }
+    }
 }
 
 /// Creates an HTML page, adding the <head> tag that is needed. 
@@ -223,37 +270,82 @@ fn create_html_page(is_content_list: bool) -> String {
     html
 }
 
-fn create_nav_bar(source_code_url: Option<&str>) -> String {
+fn create_nav_bar(additional_elements: Option<Vec<NavBarElement>>) -> String {
     let mut html = String::new();
     html.push_str("<nav id='navbar'>"); {
         html.push_str("<ul id='navbar_list' style='list-style: none; display: flex; flex-direction: row; justify-content: left; margin: 0px; padding: 0px;'>"); {
-            html.push_str("<li>"); {
-                html.push_str("<a href='");
-                html.push_str(INDEX_URL);
-                html.push_str("/'>Home</a>");
-            }
-            html.push_str("<li>"); {
-                html.push_str("<a href='");
-                html.push_str(INDEX_URL);
-                html.push_str("/projects'>Projects</a>");
-            }
-            html.push_str("<li>"); {
-                html.push_str("<a href='");
-                html.push_str(INDEX_URL);
-                html.push_str("/blog'>Blog</a>");
-            }
-            if let Some(source_code_url) = source_code_url {
+            let buttons = [
+                NavBarElement { 
+                    display_text: "Home".to_string(), 
+                    href: INDEX_URL.to_string() 
+                }, 
+                NavBarElement { 
+                    display_text: "Projects".to_string(), 
+                    href: format!("{}/projects", INDEX_URL) 
+                },
+                NavBarElement {
+                    display_text: "Blog".to_string(),
+                    href: format!("{}/blog", INDEX_URL)
+                }
+            ].into_iter()
+                .chain(
+                    additional_elements.into_iter()
+                        .flat_map(|opt| opt)
+                );
+            
+            for element in buttons {
                 html.push_str("<li>"); {
                     html.push_str("<a href='");
-                    html.push_str(source_code_url);
-                    html.push_str("'>Source Code</a>");
+                    html.push_str(&element.href);
+                    html.push_str("'>");
+                    html.push_str(&element.display_text);
+                    html.push_str("</a>");
                 }
             }
-            html.push_str("</li>");
         }
         html.push_str("</ul>");
     }
     html.push_str("</nav>");
+    html
+}
+
+fn generate_repo_card(index: usize, repo: &Repo) -> String {
+    let mut html = String::new();
+    html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index / 2 + 1, index % 2 + 1)); {
+        html.push_str("<h2>"); {
+            html.push_str(&format!("<a href='{}/projects/{}'>", INDEX_URL, get_url_safe_name(&repo.name))); {
+                html.push_str(&repo.name);
+            }
+            html.push_str("</a>");
+        }
+        html.push_str("</h2>");
+
+        html.push_str("<p>"); {
+            html.push_str(&repo.description);
+        }
+        html.push_str("</p>");
+    }
+    html.push_str("</li>");
+    html
+}
+
+fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
+    let mut html = String::new();
+    html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index / 2 + 1, index % 2 + 1)); {
+        html.push_str("<h2>"); {
+            html.push_str(&format!("<a href='{}/blog/{}'>", INDEX_URL, get_url_safe_name(&blog_post.name))); {
+                html.push_str(&blog_post.name);
+            }
+            html.push_str("</a>");
+        }
+        html.push_str("</h2>");
+
+        html.push_str("<p>"); {
+            html.push_str(&blog_post.description);
+        }
+        html.push_str("</p>");
+    }
+    html.push_str("</li>");
     html
 }
 
@@ -275,4 +367,9 @@ fn parse_md_to_html(md: &str) -> String {
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
     html_output
+}
+
+struct NavBarElement {
+    display_text: String,
+    href: String,
 }

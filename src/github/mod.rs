@@ -85,7 +85,7 @@ async fn fetch_github_repos() -> Result<(), ()> {
             if let Some(posts) = get_all_md_files(repo, &client).await {
                 let mut results = Vec::new();
                 for post in posts {
-                    if post.file_name == "Home.md" {
+                    if post.name == "Home" {
                         CACHE.write().unwrap().home = post;
                     } else {
                         results.push(post);
@@ -140,21 +140,21 @@ async fn get_file_content(repo: &Repo, client: &Client, path: &str) -> Option<St
         Ok(inner) => inner,
     };
     
-    let read_me: Result<Readme, _> = response
+    let file_content: Result<Readme, _> = response
         .json()
         .await;
     
-    match read_me {
+    match file_content {
         Err(err) => {
             println!("{:?}", err);
             None
         }
-        Ok(read_me) => {
+        Ok(file_content) => {
             let engine = base64::engine::general_purpose::GeneralPurpose::new(
                 &base64::alphabet::STANDARD, 
                 base64::engine::GeneralPurposeConfig::new()
             );
-            match engine.decode(read_me.content.replace("\n", "")) {
+            match engine.decode(file_content.content.replace("\n", "")) {
                 Err(err) => {
                     println!("{:?}", err);
                     None
@@ -201,9 +201,20 @@ async fn get_all_md_files(repo: &Repo, client: &Client) -> Option<Vec<BlogPost>>
                 match content {
                     None => continue,
                     Some(content) => {
+                        let mut content_without_description = Vec::new();
+                        let mut description = Vec::new();
+                        for line in content.lines() {
+                            if line.starts_with("///") {
+                                description.push(line);
+                            } else {
+                                content_without_description.push(line);
+                            }
+                        }
+
                         file_contents.push(BlogPost { 
-                                file_name: file.name, 
-                                content: content 
+                                name: file.name[0..file.name.len() - 3].to_string(), 
+                                content: content_without_description.join("\n"),
+                                description: description.join(" "),
                             });
                     }
                 }
@@ -293,7 +304,8 @@ pub (crate) struct Repo {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub (crate) struct BlogPost {
-    pub (crate) file_name: String,
+    pub (crate) name: String,
+    pub (crate) description: String,
     pub (crate) content: String,
 }
 
