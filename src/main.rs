@@ -355,7 +355,14 @@ fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
 }
 
 fn get_url_safe_name(name: &str) -> String {
-    urlencoding::encode(name).to_string()
+    name.chars().filter(|char| {
+        match char {
+            'a'..='z'
+            | 'A'..='Z'
+            | '0'..='9' => true,
+            _ => false,
+        }
+    }).collect()
 }
 
 fn parse_md_to_html(md: &str) -> String {

@@ -13,7 +13,7 @@ use sqlx::{
 
 use futures::future;
 
-use crate::AppState;
+use crate::{AppState, get_url_safe_name};
 
 const URL: &'static str = "https://api.github.com/";
 const USERNAME: &'static str = "mr-adult";
@@ -49,8 +49,8 @@ pub (crate) async fn get_repo(state: &AppState, name: &str) -> Option<Repo> {
     update_data_if_necessary(state).await;
 
     let result = sqlx::query_as::<_, Repo>(
-        "SELECT * FROM MrAdultRepositories WHERE name=$1 LIMIT 1;"
-    ).bind(name)
+        "SELECT * FROM MrAdultRepositories WHERE alphanumeric_name=$1 LIMIT 1;"
+    ).bind(get_url_safe_name(&name))
         .fetch_one(&state.db_connection)
         .await
         .ok()?;
@@ -74,8 +74,8 @@ pub (crate) async fn get_blog_post(state: &AppState, name: &str) -> Option<BlogP
     update_data_if_necessary(state).await;
 
     let result = sqlx::query_as::<_, BlogPost>(
-        "SELECT * FROM BlogPosts WHERE name=$1 LIMIT 1;"
-    ).bind(name)
+        "SELECT * FROM BlogPosts WHERE alphanumeric_name=$1 LIMIT 1;"
+    ).bind(get_url_safe_name(&name))
         .fetch_one(&state.db_connection)
         .await
         .ok()?;
@@ -283,15 +283,17 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 
                         blog_post_upsert_queries.push(
                             sqlx::query(
-                                r#"INSERT INTO BlogPosts( name, description, sha, content ) 
-                                VALUES ( $1, $2, $3, $4 ) 
+                                r#"INSERT INTO BlogPosts( name, alphanumeric_name, description, sha, content ) 
+                                VALUES ( $1, $2, $3, $4, $5 ) 
                                 ON CONFLICT (id) DO
                                 UPDATE SET 
                                     name = EXCLUDED.name,
+                                    alphanumeric_name = EXCLUDED.alphanumeric_name,
                                     description = EXCLUDED.description,
                                     sha = EXCLUDED.sha,
                                     content = EXCLUDED.content;"#
-                            ).bind(metadata.name)
+                            ).bind(metadata.name.clone())
+                                .bind(get_url_safe_name(&metadata.name))
                                 .bind(description_lines.join(" "))
                                 .bind(metadata.sha)
                                 .bind(content_lines.join("\n"))
@@ -322,7 +324,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                 // UPSERT
                 sqlx::query(
                     r#"INSERT INTO MrAdultRepositories( id, name, url, html_url, description, updated_at, readme ) 
-                    VALUES ( $1, $2, $3, $4, $5, $6, $7 ) 
+                    VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) 
                     ON CONFLICT (id) DO
                     UPDATE SET 
                         name = EXCLUDED.name,
@@ -528,6 +530,7 @@ pub (crate) struct Repo {
 pub (crate) struct BlogPost {
     pub (crate) id: i32,
     pub (crate) name: String,
+    pub (crate) alphanumeric_name: String,
     pub (crate) sha: String,
     pub (crate) description: String,
     pub (crate) content: String,
