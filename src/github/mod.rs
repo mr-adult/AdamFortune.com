@@ -21,9 +21,8 @@ const USERNAME: &'static str = "mr-adult";
 pub (crate) async fn get_home(state: &AppState) -> Option<BlogPost> {
     update_data_if_necessary(state).await;
 
-    let result = sqlx::query_file_as!(
-        BlogPost,
-        "./queries/get_home.sql"
+    let result = sqlx::query_as::<_, BlogPost>(
+        "SELECT * FROM BlogPosts WHERE name='Home' LIMIT 1;"
     ).fetch_one(&state.db_connection)
         .await
         .ok()?;
@@ -37,9 +36,8 @@ pub (crate) async fn get_repos(state: &AppState) -> Option<Vec<Repo>> {
 }
 
 async fn get_repos_from_db(state: &AppState) -> Option<Vec<Repo>> {
-    let result = sqlx::query_file_as!(
-            Repo, 
-            "./queries/get_all_repos.sql"
+    let result = sqlx::query_as::<_, Repo>(
+            "SELECT * FROM MrAdultRepositories ORDER BY name;"
         ).fetch_all(&state.db_connection)
         .await
         .ok()?;
@@ -50,11 +48,10 @@ async fn get_repos_from_db(state: &AppState) -> Option<Vec<Repo>> {
 pub (crate) async fn get_repo(state: &AppState, name: &str) -> Option<Repo> {
     update_data_if_necessary(state).await;
 
-    let result = sqlx::query_file_as!(
-        Repo,
-        "./queries/get_repository.sql",
-        name
-    ).fetch_one(&state.db_connection)
+    let result = sqlx::query_as::<_, Repo>(
+        "SELECT * FROM MrAdultRepositories WHERE name=$1 LIMIT 1;"
+    ).bind(name)
+        .fetch_one(&state.db_connection)
         .await
         .ok()?;
 
@@ -64,9 +61,8 @@ pub (crate) async fn get_repo(state: &AppState, name: &str) -> Option<Repo> {
 pub (crate) async fn get_blog_posts(state: &AppState) -> Option<Vec<BlogPost>> {
     update_data_if_necessary(state).await;
 
-    let result = sqlx::query_file_as!(
-        BlogPost,
-        "./queries/get_all_blog_posts.sql"
+    let result = sqlx::query_as::<_, BlogPost>(
+        "SELECT * FROM BlogPosts WHERE name <> 'Home' ORDER BY name;"
     ).fetch_all(&state.db_connection)
         .await
         .ok()?;
@@ -77,11 +73,10 @@ pub (crate) async fn get_blog_posts(state: &AppState) -> Option<Vec<BlogPost>> {
 pub (crate) async fn get_blog_post(state: &AppState, name: &str) -> Option<BlogPost> {
     update_data_if_necessary(state).await;
 
-    let result = sqlx::query_file_as!(
-        BlogPost,
-        "./queries/get_blog_post.sql",
-        name
-    ).fetch_one(&state.db_connection)
+    let result = sqlx::query_as::<_, BlogPost>(
+        "SELECT * FROM BlogPosts WHERE name=$1 LIMIT 1;"
+    ).bind(name)
+        .fetch_one(&state.db_connection)
         .await
         .ok()?;
 
@@ -129,6 +124,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
             None => {
                 for item in db_iter {
                     // no corresponding items in github. Delete them!
+                    println!("Queued repo {} for deletion", item.name);
                     result.push((ModificationType::Delete, item))
                 }
                 break;
@@ -137,6 +133,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                 match &current_db_value {
                     None => {
                         // no corresponding repo in DB. Add it!
+                        println!("Queued repo {} for upsert", github_val.name);
                         result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
                         current_github_value = github_iter.next();
                         continue;
@@ -144,12 +141,14 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                     Some(db_value) => {
                         match github_val.id.cmp(&db_value.id) {
                             std::cmp::Ordering::Less => {
+                                println!("Queued repo {} for upsert", github_val.name);
                                 result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
                                 // move the github cursor.
                                 current_github_value = github_iter.next();
                             }
                             std::cmp::Ordering::Equal => {
                                 if github_val.updated_at > db_value.updated_at {
+                                    println!("Queued repo {} for upsert", github_val.name);
                                     result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
                                 } else {
                                     result.push((ModificationType::None, current_github_value.expect("github value to be Some() variant")));
@@ -160,6 +159,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                 current_github_value = github_iter.next();
                             }
                             std::cmp::Ordering::Greater => {
+                                println!("Queued repo {} for delete", db_value.name);
                                 result.push((ModificationType::Delete, current_db_value.expect("db value to be Some() variant")));
                                 // move the db cursor.
                                 current_db_value = db_iter.next();
@@ -179,15 +179,18 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 
         if repo.name == "blog-posts" {
             let mut github_blog_posts = get_all_md_files(&repo, &client).await?;
-            let mut db_read_mes = sqlx::query_file_as!(
-                BlogPost, 
-                "./queries/get_all_blog_posts.sql"
+            let mut db_read_mes = sqlx::query_as::<_, BlogPost>(
+                "SELECT * FROM BlogPosts;"
             ).fetch_all(&state.db_connection)
                 .await
                 .ok()?;
 
             github_blog_posts.sort_by(|readme1, readme2| readme1.name.cmp(&readme2.name));
             db_read_mes.sort_by(|readme1, readme2| readme1.name.cmp(&readme2.name));
+
+            for github_blog_post in github_blog_posts.iter_mut() {
+                github_blog_post.name = github_blog_post.name[0..github_blog_post.name.len() - 3].to_string(); // chop off the ".md"
+            }
 
             let mut read_mes = Vec::with_capacity(github_blog_posts.len());
 
@@ -202,6 +205,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                     None => {
                         for item in db_iter {
                             // no corresponding items in github. Delete them!
+                            println!("Queued blog post {} for deletion", item.name);
                             read_mes.push(BlogModificationType::Delete(item))
                         }
                         break;
@@ -211,6 +215,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                             None => {
                                 // no corresponding repo in DB. Add it!
                                 let path = github_val.path.clone();
+                                println!("Queued blog post {} for upsert", github_val.name);
                                 read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
                                 current_github_value = github_iter.next();
                                 continue;
@@ -219,6 +224,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                 match github_val.name.cmp(&db_value.name) {
                                     std::cmp::Ordering::Less => {
                                         let path = github_val.path.clone();
+                                        println!("Queued blog post {} for upsert", github_val.name);
                                         read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
                                         // move the github cursor.
                                         current_github_value = github_iter.next();
@@ -226,6 +232,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                     std::cmp::Ordering::Equal => {
                                         if github_val.sha != db_value.sha {
                                             let path = github_val.path.clone();
+                                            println!("Queued blog post {} for upsert", github_val.name);
                                             read_mes.push(BlogModificationType::Upsert((current_github_value.expect("current_github_value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
                                         } else {
                                             read_mes.push(BlogModificationType::None);
@@ -236,6 +243,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                         current_github_value = github_iter.next();
                                     }
                                     std::cmp::Ordering::Greater => {
+                                        println!("Queued blog post {} for deletion", db_value.name);
                                         read_mes.push(BlogModificationType::Delete(current_db_value.expect("current_db_value to be Some() variant")));
                                         // move the db cursor.
                                         current_db_value = db_iter.next();
@@ -274,21 +282,29 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                         }
 
                         blog_post_upsert_queries.push(
-                            sqlx::query_file!(
-                                "./queries/upsert_blog_post.sql",
-                                metadata.name[0..metadata.name.len() - 3].to_string(), // chop off the .md
-                                description_lines.join(" "),
-                                metadata.sha,
-                                content_lines.join("\n")
-                            ).execute(&state.db_connection)
+                            sqlx::query(
+                                r#"INSERT INTO BlogPosts( name, description, sha, content ) 
+                                VALUES ( $1, $2, $3, $4 ) 
+                                ON CONFLICT (id) DO
+                                UPDATE SET 
+                                    name = EXCLUDED.name,
+                                    description = EXCLUDED.description,
+                                    sha = EXCLUDED.sha,
+                                    content = EXCLUDED.content;"#
+                            ).bind(metadata.name)
+                                .bind(description_lines.join(" "))
+                                .bind(metadata.sha)
+                                .bind(content_lines.join("\n"))
+                                .execute(&state.db_connection)
                         );
                     }
                     BlogModificationType::Delete(blog_post) => {
+                        println!("Deleting {}", blog_post.name);
                         blog_post_upsert_queries.push(
-                            sqlx::query_file!(
-                                "./queries/delete_blog_post.sql",
-                                blog_post.id
-                            ).execute(&state.db_connection)
+                            sqlx::query(
+                                "DELETE FROM BlogPosts WHERE id=$1;"
+                            ).bind(blog_post.id)
+                                .execute(&state.db_connection)
                         );
                     }
                     BlogModificationType::None => {}
@@ -304,16 +320,25 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                 repo.readme = get_read_me(&repo, &client).await;
 
                 // UPSERT
-                sqlx::query_file!(
-                    "./queries/upsert_repo.sql",
-                    repo.id,
-                    repo.name,
-                    repo.url,
-                    repo.html_url,
-                    repo.description,
-                    repo.updated_at,
-                    repo.readme
-                ).execute(&state.db_connection)
+                sqlx::query(
+                    r#"INSERT INTO MrAdultRepositories( id, name, url, html_url, description, updated_at, readme ) 
+                    VALUES ( $1, $2, $3, $4, $5, $6, $7 ) 
+                    ON CONFLICT (id) DO
+                    UPDATE SET 
+                        name = EXCLUDED.name,
+                        url = EXCLUDED.url,
+                        html_url = EXCLUDED.html_url,
+                        description = EXCLUDED.description,
+                        updated_at = EXCLUDED.updated_at,
+                        readme = EXCLUDED.readme;"#
+                ).bind(repo.id)
+                    .bind(repo.name)
+                    .bind(repo.url)
+                    .bind(repo.html_url)
+                    .bind(repo.description)
+                    .bind(repo.updated_at)
+                    .bind(repo.readme)
+                    .execute(&state.db_connection)
                     .await
             });
         }
@@ -324,9 +349,8 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 }
 
 async fn db_data_is_stale(state: &AppState) -> bool {
-    let time_stamp_result = sqlx::query_file_as!(
-        GitHubQueryState, 
-        "./queries/get_github_query_state.sql"
+    let time_stamp_result = sqlx::query_as::<_, GitHubQueryState>(
+        "SELECT * FROM GitHubQueryState LIMIT 1;"
     ).fetch_one(&state.db_connection)
         .await
         .ok();
@@ -344,8 +368,12 @@ async fn db_data_is_stale(state: &AppState) -> bool {
     }
 
     if time_stamp < (Utc::now() - chrono::Duration::hours(1)) {
-        sqlx::query_file!(
-            "./queries/update_github_query_state.sql"
+        sqlx::query(
+            r#"UPDATE GitHubQueryState SET last_queried = 
+                CASE WHEN (last_queried + INTERVAL '1 HOUR') > NOW() 
+                THEN last_queried 
+                ELSE NOW() 
+                END;"#
         ).execute(&state.db_connection)
             .await
             .ok();

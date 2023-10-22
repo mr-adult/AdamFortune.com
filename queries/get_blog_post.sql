@@ -1,3 +1,0 @@
-SELECT * FROM BlogPosts 
-WHERE name=$1
-LIMIT 1;
