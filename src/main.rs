@@ -23,7 +23,7 @@ pub (crate) const ACCEPT_INVALID_CERTS: bool = false;
 pub (crate) const ACCEPT_INVALID_CERTS: bool = true;
 
 #[cfg(not(debug_assertions))]
-const INDEX_URL: &'static str = "adamfortune.com";
+const INDEX_URL: &'static str = "https://adamfortunecom.shuttleapp.rs";
 #[cfg(debug_assertions)]
 const INDEX_URL: &'static str = "http://127.0.0.1:8000";
 
