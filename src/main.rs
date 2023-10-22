@@ -156,10 +156,6 @@ async fn projects(State(state): State<AppState>) -> Html<String> {
 }
 
 async fn project(State(state): State<AppState>, Path(project): Path<String>) -> Result<Html<String>, StatusCode> {
-    let project = match urlencoding::decode(&project) {
-        Ok(val) => val.to_string(),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
     match github::get_repo(&state, &project).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(repo) => {
@@ -224,10 +220,6 @@ async fn blog(State(state): State<AppState>) -> Html<String> {
 }
 
 async fn blog_post(State(state): State<AppState>, Path(post): Path<String>) -> Result<Html<String>, StatusCode> {
-    let post = match urlencoding::decode(&post) {
-        Ok(val) => val.to_string(),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
     match github::get_blog_post(&state, &post).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(blog_post) => {
