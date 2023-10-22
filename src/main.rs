@@ -219,8 +219,8 @@ async fn blog(State(state): State<AppState>) -> Html<String> {
     }
 }
 
-async fn blog_post(State(state): State<AppState>, Path(post): Path<String>) -> Result<Html<String>, StatusCode> {
-    match github::get_blog_post(&state, &post).await {
+async fn blog_post(State(state): State<AppState>, Path(blog): Path<String>) -> Result<Html<String>, StatusCode> {
+    match github::get_blog_post(&state, &blog).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(blog_post) => {
             let mut html = create_html_page(false);
