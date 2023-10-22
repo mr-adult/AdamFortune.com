@@ -354,7 +354,7 @@ fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
 }
 
 fn get_url_safe_name(name: &str) -> String {
-    return name.to_string();
+    urlencoding::encode(name).to_string()
 }
 
 fn parse_md_to_html(md: &str) -> String {
