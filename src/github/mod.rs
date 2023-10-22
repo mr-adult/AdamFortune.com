@@ -108,10 +108,6 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
     let mut db_repos = get_repos_from_db(state).await?;
     let mut github_repos = fetch_github_repos(client.clone()).await.ok()?;
 
-    for github_repo in github_repos.iter() {
-        println!("{:?}", github_repo);
-    }
-
     db_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
     github_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
 
@@ -181,10 +177,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
         .filter(|repo_result| repo_result.0 != ModificationType::None)
         .map(|repo_result| repo_result.1) {
 
-        println!("{:?}", repo);
-
         if repo.name == "blog-posts" {
-            println!("{}", "blog-posts");
             let mut github_blog_posts = get_all_md_files(&repo, &client).await?;
             let mut db_read_mes = sqlx::query_file_as!(
                 BlogPost, 
@@ -338,18 +331,13 @@ async fn db_data_is_stale(state: &AppState) -> bool {
         .await
         .ok();
 
-    println!("{:?}", time_stamp_result);
-
     // failed to get the time stamp for some reason. Treat it as up-to-date.
     if time_stamp_result.is_none() { return false; }
 
     let time_stamp: DateTime<Utc>;
     match time_stamp_result {
         // failed to connect. Just treat data as up-to-date
-        None => { 
-            println!("{}", false);
-            return false 
-        },
+        None => { return false },
         Some(time_stamp_result) => {
             time_stamp = time_stamp_result.last_queried;
         }
