@@ -1,7 +1,7 @@
 use axum::{
     Router, 
     response::Html, 
-    routing::get, extract::Path
+    routing::get, extract::{Path, State}
 };
 use github::{Repo, BlogPost};
 use pulldown_cmark::{
@@ -9,10 +9,9 @@ use pulldown_cmark::{
     Parser, 
     html
 };
-use reqwest::StatusCode;
-
-#[macro_use]
-extern crate lazy_static;
+use reqwest::{StatusCode, Method};
+use sqlx::PgPool;
+use tower_http::cors::{Any, CorsLayer};
 
 mod github;
 mod utils;
@@ -26,9 +25,9 @@ pub (crate) const ACCEPT_INVALID_CERTS: bool = true;
 #[cfg(not(debug_assertions))]
 const INDEX_URL: &'static str = "adamfortune.com";
 #[cfg(debug_assertions)]
-const INDEX_URL: &'static str = "http://localhost:3000";
+const INDEX_URL: &'static str = "http://127.0.0.1:8000";
 
-const ERROR_RESPONSE: &'static str = "Failed to reach github to fetch resources.";
+const ERROR_RESPONSE: &'static str = "Failed to reach database.";
 
 const ALL_PAGES_CSS: &'static str = r#"
 html, body {
@@ -81,35 +80,50 @@ const MARKDOWN_CSS: &'static str = r#"
 
 "#;
 
-#[tokio::main]
-async fn main() {
+#[shuttle_runtime::main]
+pub async fn shuttle_main (
+    #[shuttle_shared_db::Postgres(local_uri = "postgresql://localhost/adamfortunecom?user=adam&password={secrets.PASSWORD}")] pool: PgPool,
+    #[shuttle_secrets::Secrets] _secrets: shuttle_secrets::SecretStore,
+) -> shuttle_axum::ShuttleAxum {
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("Migrations failed :(");
+
+    let cors = CorsLayer::new()
+        // allow `GET` and `POST` when accessing the resource
+        .allow_methods([Method::GET])
+        // allow requests from any origin
+        .allow_origin(Any);
+    
+
+    let state = AppState::new(pool);
+
     let app = Router::new()
         .route("/", get(index))
         .route("/projects", get(projects))
         .route("/projects/:project", get(project))
         .route("/blog", get(blog))
-        .route("/blog/:blog", get(blog_post));
+        .route("/blog/:blog", get(blog_post))
+        .with_state(state.clone())
+        .layer(cors);
 
-    // run it with hyper on localhost:3000
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    Ok(app.into())
 }
 
-async fn index() -> Html<String> {
-    match github::get_data().await {
-        Err(_) => {
+async fn index(State(state): State<AppState>) -> Html<String> {
+    match github::get_home(&state).await {
+        None => {
             Html(ERROR_RESPONSE.to_string())
         }
-        Ok(data) => {
+        Some(data) => {
             let mut html = create_html_page(false);
             html.push_str("<body onLoad='onLoad()'>"); {
                 
 
                 html.push_str(&create_nav_bar(None));
                 html.push_str("<div style='margin-left:8px;'>"); {
-                    html.push_str(&parse_md_to_html(&data.home.content));
+                    html.push_str(&parse_md_to_html(&data.content));
                 }
                 html.push_str("</div>");
             }
@@ -119,17 +133,17 @@ async fn index() -> Html<String> {
     }
 }
 
-async fn projects() -> Html<String> {
-    match github::get_data().await {
-        Err(_) => Html(ERROR_RESPONSE.to_string()),
-        Ok(data) => {
+async fn projects(State(state): State<AppState>) -> Html<String> {
+    match github::get_repos(&state).await {
+        None => Html(ERROR_RESPONSE.to_string()),
+        Some(data) => {
             let mut html = create_html_page(true);
             html.push_str("<body onLoad='onLoad()'>"); {
                 html.push_str(&create_nav_bar(None));
 
                 html.push_str("<ul style='display: grid;column-count: 2;column-gap: 20px;row-gap: 20px; margin-right: 30px'>");
                 
-                for (i, repo) in data.repos.iter().enumerate() {
+                for (i, repo) in data.iter().enumerate() {
                     html.push_str(&generate_repo_card(i, repo));
                 }
 
@@ -141,64 +155,59 @@ async fn projects() -> Html<String> {
     }
 }
 
-async fn project(Path(project): Path<String>) -> Result<Html<String>, StatusCode> {
-    match github::get_data().await {
-        Err(_) => Ok(Html(ERROR_RESPONSE.to_string())),
-        Ok(data) => {
-            match data.repos.into_iter().find(|repo| get_url_safe_name(&repo.name) == get_url_safe_name(&project)) {
-                None => Err(StatusCode::NOT_FOUND),
-                Some(repo) => {
-                    let mut html = create_html_page(false);
-                    html.push_str("<body onLoad='onLoad()'>");
-                    let mut additional_nav_bar_elements = 
-                        vec![
-                            NavBarElement { 
-                                display_text: "Source Code".to_string(), 
-                                href: repo.html_url 
-                            }
-                        ];
-
-                    if repo.name == "tree-iterators-rs" {
-                        additional_nav_bar_elements.push(
-                            NavBarElement { 
-                                display_text: "Crates.io".to_string(), 
-                                href: "https://crates.io/crates/tree_iterators_rs".to_string() 
-                            }
-                        )   
+async fn project(State(state): State<AppState>, Path(project): Path<String>) -> Result<Html<String>, StatusCode> {
+    match github::get_repo(&state, &project).await {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(repo) => {
+            let mut html = create_html_page(false);
+            html.push_str("<body onLoad='onLoad()'>");
+            let mut additional_nav_bar_elements = 
+                vec![
+                    NavBarElement { 
+                        display_text: "Source Code".to_string(), 
+                        href: repo.html_url 
                     }
+                ];
 
-                    html.push_str(&create_nav_bar(Some(additional_nav_bar_elements)));
-                    match repo.readme {
-                        None => {
-                            html.push_str("</body>");
-                            Ok(Html(html))
-                        }
-                        Some(readme) => {
-                            html.push_str("<div>"); {
-                                html.push_str(&parse_md_to_html(&readme));
-                            }
-                            html.push_str("</div>");
-                            html.push_str("</body>");
-                            Ok(Html(html))
-                        }
+            if repo.name == "tree-iterators-rs" {
+                additional_nav_bar_elements.push(
+                    NavBarElement { 
+                        display_text: "Crates.io".to_string(), 
+                        href: "https://crates.io/crates/tree_iterators_rs".to_string() 
                     }
+                )   
+            }
+
+            html.push_str(&create_nav_bar(Some(additional_nav_bar_elements)));
+            match repo.readme {
+                None => {
+                    html.push_str("</body>");
+                    Ok(Html(html))
+                }
+                Some(readme) => {
+                    html.push_str("<div>"); {
+                        html.push_str(&parse_md_to_html(&readme));
+                    }
+                    html.push_str("</div>");
+                    html.push_str("</body>");
+                    Ok(Html(html))
                 }
             }
         }
     }
 }
 
-async fn blog() -> Html<String> {
-    match github::get_data().await {
-        Err(_) => Html(ERROR_RESPONSE.to_string()),
-        Ok(data) => {
+async fn blog(State(state): State<AppState>) -> Html<String> {
+    match github::get_blog_posts(&state).await {
+        None => Html(ERROR_RESPONSE.to_string()),
+        Some(data) => {
             let mut html = create_html_page(true);
             html.push_str("<body onLoad='onLoad()'>"); {
                 html.push_str(&create_nav_bar(None));
 
                 html.push_str("<ul style='display: grid;column-count: 2;column-gap: 20px;row-gap: 20px; margin-right: 30px'>");
                 
-                for (i, blog_post) in data.blog_posts.iter().enumerate() {
+                for (i, blog_post) in data.iter().enumerate() {
                     html.push_str(&generate_blog_card(i, blog_post));
                 }
 
@@ -210,23 +219,18 @@ async fn blog() -> Html<String> {
     }
 }
 
-async fn blog_post(Path(post): Path<String>) -> Result<Html<String>, StatusCode> {
-    match github::get_data().await {
-        Err(_) => Ok(Html(ERROR_RESPONSE.to_string())),
-        Ok(data) => {
-            match data.blog_posts.into_iter().find(|blog_post| get_url_safe_name(&post) == get_url_safe_name(&blog_post.name)) {
-                None => Err(StatusCode::NOT_FOUND),
-                Some(blog_post) => {
-                    let mut html = create_html_page(false);
-                    html.push_str("<body onLoad='onLoad()'>");
-                    html.push_str("<div>"); {
-                        html.push_str(&parse_md_to_html(&blog_post.content));
-                    }
-                    html.push_str("</div>");
-                    html.push_str("</body>");
-                    Ok(Html(html))
-                }
+async fn blog_post(State(state): State<AppState>, Path(post): Path<String>) -> Result<Html<String>, StatusCode> {
+    match github::get_blog_post(&state, &post).await {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(blog_post) => {
+            let mut html = create_html_page(false);
+            html.push_str("<body onLoad='onLoad()'>");
+            html.push_str("<div>"); {
+                html.push_str(&parse_md_to_html(&blog_post.content));
             }
+            html.push_str("</div>");
+            html.push_str("</body>");
+            Ok(Html(html))
         }
     }
 }
@@ -350,6 +354,7 @@ fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
 }
 
 fn get_url_safe_name(name: &str) -> String {
+    return name.to_string();
     return name.chars()
         .filter(|char| {
             match char {
@@ -372,4 +377,17 @@ fn parse_md_to_html(md: &str) -> String {
 struct NavBarElement {
     display_text: String,
     href: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    db_connection: PgPool
+}
+
+impl AppState {
+    fn new(pool: PgPool) -> Self {
+        Self {
+            db_connection: pool,
+        }
+    }
 }

@@ -1,2 +1,4 @@
 /target
-/src/github/cache.json
+Secrets.toml
+Secrets.dev.toml
+.env

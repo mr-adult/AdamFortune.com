@@ -1,61 +1,377 @@
-use std::{sync::RwLock, time::Duration, fs::OpenOptions, io::{Write, Read}};
+use std::{time::Duration, sync::Arc};
 
 use base64::Engine;
-use chrono::{Utc, DateTime};
 use reqwest::{ClientBuilder, Client};
 use serde_derive::{Deserialize, Serialize};
+use sqlx::{
+    FromRow, 
+    types::chrono::{
+        DateTime,
+        Utc
+    }
+};
+
+use futures::future;
+
+use crate::AppState;
 
 const URL: &'static str = "https://api.github.com/";
 const USERNAME: &'static str = "mr-adult";
-const CACHE_FILE_PATH: &'static str = "./src/github/cache.json";
 
-static UPDATE_IN_PROGRESS: RwLock<bool> = RwLock::new(false);
-lazy_static!{
-    static ref CACHE: RwLock<GithubData> = RwLock::new(GithubData::default());
+pub (crate) async fn get_home(state: &AppState) -> Option<BlogPost> {
+    update_data_if_necessary(state).await;
+
+    let result = sqlx::query_file_as!(
+        BlogPost,
+        "./queries/get_home.sql"
+    ).fetch_one(&state.db_connection)
+        .await
+        .ok()?;
+
+    Some(result)
 }
 
-pub (crate) async fn get_data() -> Result<GithubData, ()> {
-    let mut out_of_date = false;
-    {
-        let index = CACHE.read().unwrap();
-        if index.last_updated < (Utc::now() - chrono::Duration::hours(1)) {
-            out_of_date = true;
-        }
-    }
-
-    if out_of_date {
-        // make sure another thread isn't already querying 
-        // github before we fire off some queries
-        if !*UPDATE_IN_PROGRESS.read().unwrap() {
-            fetch_github_repos().await?
-        }
-    }
-    Ok(CACHE.read().unwrap().clone())
+pub (crate) async fn get_repos(state: &AppState) -> Option<Vec<Repo>> {
+    update_data_if_necessary(state).await;
+    get_repos_from_db(state).await
 }
 
-async fn fetch_github_repos() -> Result<(), ()> {
-    { *UPDATE_IN_PROGRESS.write().unwrap() = true; }
-    let last_updated;
-    { last_updated = CACHE.read().unwrap().last_updated; }
+async fn get_repos_from_db(state: &AppState) -> Option<Vec<Repo>> {
+    let result = sqlx::query_file_as!(
+            Repo, 
+            "./queries/get_all_repos.sql"
+        ).fetch_all(&state.db_connection)
+        .await
+        .ok()?;
 
-    if let Ok(_) = fetch_data_from_file(last_updated) {
-        return Ok(());
+    Some(result)
+}
+
+pub (crate) async fn get_repo(state: &AppState, name: &str) -> Option<Repo> {
+    update_data_if_necessary(state).await;
+
+    let result = sqlx::query_file_as!(
+        Repo,
+        "./queries/get_repository.sql",
+        name
+    ).fetch_one(&state.db_connection)
+        .await
+        .ok()?;
+
+    Some(result)
+}
+
+pub (crate) async fn get_blog_posts(state: &AppState) -> Option<Vec<BlogPost>> {
+    update_data_if_necessary(state).await;
+
+    let result = sqlx::query_file_as!(
+        BlogPost,
+        "./queries/get_all_blog_posts.sql"
+    ).fetch_all(&state.db_connection)
+        .await
+        .ok()?;
+
+    Some(result)
+}
+
+pub (crate) async fn get_blog_post(state: &AppState, name: &str) -> Option<BlogPost> {
+    update_data_if_necessary(state).await;
+
+    let result = sqlx::query_file_as!(
+        BlogPost,
+        "./queries/get_blog_post.sql",
+        name
+    ).fetch_one(&state.db_connection)
+        .await
+        .ok()?;
+
+    Some(result)
+}
+
+pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
+    if !db_data_is_stale(state).await {
+        return Some(())
     }
-
-    let mut get_all_repos_url = URL.to_owned();
-    get_all_repos_url.push_str(&format!("users/{}/repos", USERNAME));
 
     let timeout = Duration::from_secs(5);
-    let client = ClientBuilder::new()
+    let client_result = ClientBuilder::new()
         .danger_accept_invalid_certs(crate::ACCEPT_INVALID_CERTS)
         .timeout(timeout)
         .user_agent("adamfortune.com server")
         .build();
 
-    let client = match client {
-        Ok(inner) => inner,
-        Err(_) => Err(())?,
+    let client = match client_result {
+        Ok(inner) => Arc::new(inner),
+        Err(_) => return None,
     };
+
+    let mut db_repos = get_repos_from_db(state).await?;
+    let mut github_repos = fetch_github_repos(client.clone()).await.ok()?;
+
+    for github_repo in github_repos.iter() {
+        println!("{:?}", github_repo);
+    }
+
+    db_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
+    github_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
+
+    let iterations = 
+        if db_repos.len() == 0 && github_repos.len() == 0 { 0 }
+        else if db_repos.len() > github_repos.len() { db_repos.len() }
+        else { github_repos.len() };
+
+    let mut result = Vec::with_capacity(github_repos.len());
+
+    let mut db_iter = db_repos.into_iter();
+    let mut current_db_value = db_iter.next();
+    let mut github_iter = github_repos.into_iter();
+    let mut current_github_value = github_iter.next();
+
+    // resolve mismatches
+    for _ in 0..iterations {
+        match &current_github_value {
+            None => {
+                for item in db_iter {
+                    // no corresponding items in github. Delete them!
+                    result.push((ModificationType::Delete, item))
+                }
+                break;
+            },
+            Some(github_val) => {
+                match &current_db_value {
+                    None => {
+                        // no corresponding repo in DB. Add it!
+                        result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
+                        current_github_value = github_iter.next();
+                        continue;
+                    }
+                    Some(db_value) => {
+                        match github_val.id.cmp(&db_value.id) {
+                            std::cmp::Ordering::Less => {
+                                result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
+                                // move the github cursor.
+                                current_github_value = github_iter.next();
+                            }
+                            std::cmp::Ordering::Equal => {
+                                if github_val.updated_at > db_value.updated_at {
+                                    result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
+                                } else {
+                                    result.push((ModificationType::None, current_github_value.expect("github value to be Some() variant")));
+                                }
+                
+                                // move both cursors.
+                                current_db_value = db_iter.next();
+                                current_github_value = github_iter.next();
+                            }
+                            std::cmp::Ordering::Greater => {
+                                result.push((ModificationType::Delete, current_db_value.expect("db value to be Some() variant")));
+                                // move the db cursor.
+                                current_db_value = db_iter.next();
+                            }
+                        }
+                    }
+                }
+            },
+        };        
+    }
+
+    let mut repo_upserts = Vec::new();
+
+    for mut repo in result.into_iter()
+        .filter(|repo_result| repo_result.0 != ModificationType::None)
+        .map(|repo_result| repo_result.1) {
+
+        println!("{:?}", repo);
+
+        if repo.name == "blog-posts" {
+            println!("{}", "blog-posts");
+            let mut github_blog_posts = get_all_md_files(&repo, &client).await?;
+            let mut db_read_mes = sqlx::query_file_as!(
+                BlogPost, 
+                "./queries/get_all_blog_posts.sql"
+            ).fetch_all(&state.db_connection)
+                .await
+                .ok()?;
+
+            github_blog_posts.sort_by(|readme1, readme2| readme1.name.cmp(&readme2.name));
+            db_read_mes.sort_by(|readme1, readme2| readme1.name.cmp(&readme2.name));
+
+            let mut read_mes = Vec::with_capacity(github_blog_posts.len());
+
+            let mut db_iter = db_read_mes.into_iter();
+            let mut current_db_value = db_iter.next();
+            let mut github_iter = github_blog_posts.into_iter();
+            let mut current_github_value = github_iter.next();
+        
+            // resolve mismatches
+            for _ in 0..iterations {
+                match &current_github_value {
+                    None => {
+                        for item in db_iter {
+                            // no corresponding items in github. Delete them!
+                            read_mes.push(BlogModificationType::Delete(item))
+                        }
+                        break;
+                    },
+                    Some(github_val) => {
+                        match &current_db_value {
+                            None => {
+                                // no corresponding repo in DB. Add it!
+                                let path = github_val.path.clone();
+                                read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
+                                current_github_value = github_iter.next();
+                                continue;
+                            }
+                            Some(db_value) => {
+                                match github_val.name.cmp(&db_value.name) {
+                                    std::cmp::Ordering::Less => {
+                                        let path = github_val.path.clone();
+                                        read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
+                                        // move the github cursor.
+                                        current_github_value = github_iter.next();
+                                    }
+                                    std::cmp::Ordering::Equal => {
+                                        if github_val.sha != db_value.sha {
+                                            let path = github_val.path.clone();
+                                            read_mes.push(BlogModificationType::Upsert((current_github_value.expect("current_github_value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
+                                        } else {
+                                            read_mes.push(BlogModificationType::None);
+                                        }
+                
+                                        // move both cursors.
+                                        current_db_value = db_iter.next();
+                                        current_github_value = github_iter.next();
+                                    }
+                                    std::cmp::Ordering::Greater => {
+                                        read_mes.push(BlogModificationType::Delete(current_db_value.expect("current_db_value to be Some() variant")));
+                                        // move the db cursor.
+                                        current_db_value = db_iter.next();
+                                    }
+                                }
+                            },
+                        };
+                    },
+                };
+            }
+
+            let mut blog_post_upsert_queries = Vec::new();
+
+            for read_me in read_mes.into_iter() {
+                match read_me {
+                    BlogModificationType::Upsert((metadata, future)) => {
+                        // UPSERT
+                        let md_content = future.await;
+
+                        let mut description_lines = Vec::new();
+                        let mut content_lines = Vec::new();
+                        match &md_content {
+                            None => {
+                                description_lines = Vec::with_capacity(0);
+                                content_lines = Vec::with_capacity(0);
+                            },
+                            Some(content) => {
+                                for line in content.lines() {
+                                    if line.starts_with("///") {
+                                        description_lines.push(line);
+                                    } else {
+                                        content_lines.push(line);
+                                    }
+                                }
+                            }
+                        }
+
+                        blog_post_upsert_queries.push(
+                            sqlx::query_file!(
+                                "./queries/upsert_blog_post.sql",
+                                metadata.name[0..metadata.name.len() - 3].to_string(), // chop off the .md
+                                description_lines.join(" "),
+                                metadata.sha,
+                                content_lines.join("\n")
+                            ).execute(&state.db_connection)
+                        );
+                    }
+                    BlogModificationType::Delete(blog_post) => {
+                        blog_post_upsert_queries.push(
+                            sqlx::query_file!(
+                                "./queries/delete_blog_post.sql",
+                                blog_post.id
+                            ).execute(&state.db_connection)
+                        );
+                    }
+                    BlogModificationType::None => {}
+                }
+            }
+
+            future::join_all(blog_post_upsert_queries)
+                .await;
+
+        } else {
+            let client = client.clone();
+            repo_upserts.push(async move {
+                repo.readme = get_read_me(&repo, &client).await;
+
+                // UPSERT
+                sqlx::query_file!(
+                    "./queries/upsert_repo.sql",
+                    repo.id,
+                    repo.name,
+                    repo.url,
+                    repo.html_url,
+                    repo.description,
+                    repo.updated_at,
+                    repo.readme
+                ).execute(&state.db_connection)
+                    .await
+            });
+        }
+    }
+
+    future::join_all(repo_upserts).await;
+    Some(())
+}
+
+async fn db_data_is_stale(state: &AppState) -> bool {
+    let time_stamp_result = sqlx::query_file_as!(
+        GitHubQueryState, 
+        "./queries/get_github_query_state.sql"
+    ).fetch_one(&state.db_connection)
+        .await
+        .ok();
+
+    println!("{:?}", time_stamp_result);
+
+    // failed to get the time stamp for some reason. Treat it as up-to-date.
+    if time_stamp_result.is_none() { return false; }
+
+    let time_stamp: DateTime<Utc>;
+    match time_stamp_result {
+        // failed to connect. Just treat data as up-to-date
+        None => { 
+            println!("{}", false);
+            return false 
+        },
+        Some(time_stamp_result) => {
+            time_stamp = time_stamp_result.last_queried;
+        }
+    }
+
+    if time_stamp < (Utc::now() - chrono::Duration::hours(1)) {
+        sqlx::query_file!(
+            "./queries/update_github_query_state.sql"
+        ).execute(&state.db_connection)
+            .await
+            .ok();
+
+        return true;
+    } else {
+        // up to date - no updates needed.
+        return false;
+    }
+}
+
+async fn fetch_github_repos(client: Arc<Client>) -> Result<Vec<Repo>, ()> {
+    let mut get_all_repos_url = URL.to_string();
+    get_all_repos_url.push_str(&format!("users/{}/repos", USERNAME));
 
     let response = client
         .get(&get_all_repos_url)
@@ -72,7 +388,7 @@ async fn fetch_github_repos() -> Result<(), ()> {
         .json()
         .await;
 
-    let mut repos = match json {
+    let repos = match json {
         Err(err) => {
             println!("{:?}", err);
             return Err(());
@@ -80,45 +396,15 @@ async fn fetch_github_repos() -> Result<(), ()> {
         Ok(json) => json,
     };
 
-    for repo in repos.iter_mut() {
-        if repo.name == "blog-posts" {
-            if let Some(posts) = get_all_md_files(repo, &client).await {
-                let mut results = Vec::new();
-                for post in posts {
-                    if post.name == "Home" {
-                        CACHE.write().unwrap().home = post;
-                    } else {
-                        results.push(post);
-                    }
-                }
-                CACHE.write().unwrap().blog_posts = results;
-            } else {
-                crate::utils::log_error("Failed to load blog posts".to_string());
-            }
-        } else {
-            repo.readme = get_read_me(repo, &client).await;
-        }
-    }
-    // blog-posts is special. Don't show it as an actual repo.
-    repos = repos.into_iter().filter(|repo| repo.name != "blog-posts").collect();
-
-    {
-        let mut index_write = CACHE.write().unwrap();
-        if index_write.last_updated < Utc::now() - chrono::Duration::hours(1) {
-            index_write.repos = repos;
-            index_write.last_updated = Utc::now();
-        }
-    }
-
-    { *UPDATE_IN_PROGRESS.write().unwrap() = false; }
-
-    flush_data_to_file();
-
-    return Ok(());
+    Ok(repos)
 }
 
 async fn get_read_me(repo: &Repo, client: &Client) -> Option<String> {
     get_file_content(repo, client, "README.md").await
+}
+
+async fn get_file_content_owned(repo: &Repo, client: &Client, path: String) -> Option<String> {
+    get_file_content(repo, client, &path).await
 }
 
 async fn get_file_content(repo: &Repo, client: &Client, path: &str) -> Option<String> {
@@ -167,7 +453,7 @@ async fn get_file_content(repo: &Repo, client: &Client, path: &str) -> Option<St
     }
 }
 
-async fn get_all_md_files(repo: &Repo, client: &Client) -> Option<Vec<BlogPost>> {
+async fn get_all_md_files(repo: &Repo, client: &Client) -> Option<Vec<FileMetadata>> {
     let mut get_repo_content_url = URL.to_owned();
     get_repo_content_url.push_str(&format!("repos/{}/{}/contents/", USERNAME, &repo.name));
 
@@ -191,109 +477,29 @@ async fn get_all_md_files(repo: &Repo, client: &Client) -> Option<Vec<BlogPost>>
     
     match files {
         Err(err) => {
-            println!("{:?}", err);
+            crate::utils::log_error(err);
             None
         }
         Ok(files) => {
-            let mut file_contents = Vec::new();
-            for file in files.into_iter().filter(|file| file.path.ends_with(".md")) {
-                let content = get_file_content(repo, client, &file.path).await;
-                match content {
-                    None => continue,
-                    Some(content) => {
-                        let mut content_without_description = Vec::new();
-                        let mut description = Vec::new();
-                        for line in content.lines() {
-                            if line.starts_with("///") {
-                                description.push(line);
-                            } else {
-                                content_without_description.push(line);
-                            }
-                        }
-
-                        file_contents.push(BlogPost { 
-                                name: file.name[0..file.name.len() - 3].to_string(), 
-                                content: content_without_description.join("\n"),
-                                description: description.join(" "),
-                            });
-                    }
-                }
-            }
-            Some(file_contents)
+            return Some(
+                files.into_iter()
+                    .filter(|file| file.path.ends_with(".md"))
+                    .collect()
+                );
         }
     }
 }
 
-#[cfg(debug_assertions)]
-fn fetch_data_from_file(last_updated: DateTime<Utc>) -> Result<(), ()> {
-    {
-        // github has a rate limit of 60 requests/hour, so use a 
-        // file so new debugging deployments don't hit the API
-        if last_updated == DateTime::<Utc>::default() {
-            if let Ok(mut file) = OpenOptions::new().read(true).write(false).open(CACHE_FILE_PATH) {
-                let mut result = String::new();
-                if let Ok(_) = file.read_to_string(&mut result) {
-                    if let Ok(data) = serde_json::from_str::<GithubData>(&result) {
-                        if data.last_updated > Utc::now() - chrono::Duration::hours(1) {
-                            *CACHE.write().unwrap() = data;
-                            return Ok(());
-                        }
-                    }
-                }
-            } 
-        }
-
-        return Err(());
-    }
+#[derive(Clone, Debug, Default, FromRow)]
+pub struct GitHubQueryState {
+    #[allow(unused)]
+    id: i32,
+    last_queried: DateTime<Utc>
 }
 
-#[cfg(debug_assertions)]
-fn flush_data_to_file() {
-    // github has a rate limit of 60 requests/hour, so use a 
-    // file so new debugging deployments don't hit the API
-    let content_to_flush_to_file;
-    {
-        let index_read = CACHE.read().unwrap();
-        content_to_flush_to_file = serde_json::to_string_pretty(&*index_read).unwrap();
-    }
-
-    let mut open_options = OpenOptions::new();
-    
-    open_options
-        .read(false)
-        .write(true)
-        .truncate(true);
-
-    match open_options.open(CACHE_FILE_PATH) {
-        Err(err) => {
-            crate::utils::log_error(err);
-            match open_options.create(true).open(CACHE_FILE_PATH) {
-                Err(err) => crate::utils::log_error(err),
-                Ok(mut file) => {
-                    if let Err(err) = file.write_all(content_to_flush_to_file.as_bytes()) {
-                        crate::utils::log_error(err);
-                    }
-                }
-            }
-        }
-        Ok(mut file) => {
-            if let Err(err) = file.write_all(content_to_flush_to_file.as_bytes()) {
-                crate::utils::log_error(err);
-            }
-        }
-    }
-}
-
-#[derive(Clone, Default, Deserialize, Serialize)]
-pub (crate) struct GithubData {
-    last_updated: DateTime<Utc>,
-    pub (crate) repos: Vec<Repo>,
-    pub (crate) home: BlogPost,
-    pub (crate) blog_posts: Vec<BlogPost>,
-}
-
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, FromRow)]
 pub (crate) struct Repo {
+    pub (crate) id: i64,
     pub (crate) name: String,
     pub (crate) url: String,
     pub (crate) html_url: String,
@@ -302,9 +508,11 @@ pub (crate) struct Repo {
     pub (crate) readme: Option<String>,
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize, FromRow)]
 pub (crate) struct BlogPost {
+    pub (crate) id: i32,
     pub (crate) name: String,
+    pub (crate) sha: String,
     pub (crate) description: String,
     pub (crate) content: String,
 }
@@ -319,4 +527,18 @@ pub (crate) struct FileMetadata {
 #[derive(Deserialize, Serialize)]
 pub (crate) struct Readme {
     pub (crate) content: String
+}
+
+#[derive(PartialEq, Eq)]
+pub (crate) enum ModificationType {
+    Delete,
+    Upsert,
+    None,
+}
+
+pub (crate) enum BlogModificationType<T>
+    where T: std::future::Future<Output = Option<String>> {
+    Delete(BlogPost),
+    Upsert((FileMetadata, T)),
+    None
 }
