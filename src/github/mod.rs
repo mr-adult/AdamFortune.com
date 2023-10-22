@@ -22,7 +22,7 @@ pub (crate) async fn get_home(state: &AppState) -> Option<BlogPost> {
     update_data_if_necessary(state).await;
 
     let result = sqlx::query_as::<_, BlogPost>(
-        "SELECT * FROM BlogPosts WHERE name='Home' LIMIT 1;"
+        "SELECT * FROM BlogPosts WHERE alphanumeric_name='Home' LIMIT 1;"
     ).fetch_one(&state.db_connection)
         .await
         .ok()?;
@@ -37,7 +37,7 @@ pub (crate) async fn get_repos(state: &AppState) -> Option<Vec<Repo>> {
 
 async fn get_repos_from_db(state: &AppState) -> Option<Vec<Repo>> {
     let result = sqlx::query_as::<_, Repo>(
-            "SELECT * FROM MrAdultRepositories ORDER BY name;"
+            "SELECT * FROM MrAdultRepositories ORDER BY alphanumeric_name;"
         ).fetch_all(&state.db_connection)
         .await
         .ok()?;
@@ -62,7 +62,7 @@ pub (crate) async fn get_blog_posts(state: &AppState) -> Option<Vec<BlogPost>> {
     update_data_if_necessary(state).await;
 
     let result = sqlx::query_as::<_, BlogPost>(
-        "SELECT * FROM BlogPosts WHERE name <> 'Home' ORDER BY name;"
+        "SELECT * FROM BlogPosts WHERE alphanumeric_name <> 'Home' ORDER BY alphanumeric_name;"
     ).fetch_all(&state.db_connection)
         .await
         .ok()?;
@@ -323,18 +323,20 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 
                 // UPSERT
                 sqlx::query(
-                    r#"INSERT INTO MrAdultRepositories( id, name, url, html_url, description, updated_at, readme ) 
+                    r#"INSERT INTO MrAdultRepositories( id, name, alphanumeric_name, url, html_url, description, updated_at, readme ) 
                     VALUES ( $1, $2, $3, $4, $5, $6, $7, $8 ) 
                     ON CONFLICT (id) DO
                     UPDATE SET 
                         name = EXCLUDED.name,
+                        alphanumeric_name = EXCLUDED.alphanumeric_name,
                         url = EXCLUDED.url,
                         html_url = EXCLUDED.html_url,
                         description = EXCLUDED.description,
                         updated_at = EXCLUDED.updated_at,
                         readme = EXCLUDED.readme;"#
                 ).bind(repo.id)
-                    .bind(repo.name)
+                    .bind(repo.name.clone())
+                    .bind(get_url_safe_name(&repo.name))
                     .bind(repo.url)
                     .bind(repo.html_url)
                     .bind(repo.description)
