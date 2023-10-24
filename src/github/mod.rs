@@ -147,7 +147,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                 current_github_value = github_iter.next();
                             }
                             std::cmp::Ordering::Equal => {
-                                if github_val.updated_at > db_value.updated_at {
+                                if github_val.pushed_at > db_value.pushed_at {
                                     println!("Queued repo {} for upsert", github_val.name);
                                     result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
                                 } else {
@@ -340,7 +340,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                     .bind(repo.url)
                     .bind(repo.html_url)
                     .bind(repo.description)
-                    .bind(repo.updated_at)
+                    .bind(repo.pushed_at)
                     .bind(repo.readme)
                     .execute(&state.db_connection)
                     .await
@@ -524,7 +524,8 @@ pub (crate) struct Repo {
     pub (crate) url: String,
     pub (crate) html_url: String,
     pub (crate) description: String,
-    pub (crate) updated_at: DateTime<Utc>,
+    #[sqlx(rename = "updated_at")]
+    pub (crate) pushed_at: DateTime<Utc>,
     pub (crate) readme: Option<String>,
 }
 
