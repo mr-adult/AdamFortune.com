@@ -207,9 +207,11 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
             for _ in 0..max_iterations {
                 match &current_github_value {
                     None => {
-                        let db_value = current_db_value.expect("DB value to be Some() variant");
-                        println!("Queued blog post {} for deletion", db_value.name);
-                        read_mes.push(BlogModificationType::Delete(db_value));
+                        if let Some(db_value) = current_db_value {
+                            println!("Queued blog post {} for deletion", db_value.name);
+                            read_mes.push(BlogModificationType::Delete(db_value));
+                        }
+                        
                         for item in db_iter {
                             // no corresponding items in github. Delete them!
                             println!("Queued blog post {} for deletion", item.name);
@@ -220,8 +222,11 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                     Some(github_val) => {
                         match &current_db_value {
                             None => {
-                                let path = github_val.path.clone();
-                                read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variant"), get_file_content_owned(&repo, &client, path))));
+                                if let Some(github_val) = current_github_value {
+                                    let path = github_val.path.clone();
+                                    read_mes.push(BlogModificationType::Upsert((github_val, get_file_content_owned(&repo, &client, path))));
+                                }
+                                
                                 for item in github_iter {
                                     // no corresponding repo in DB. Add it!
                                     let path = item.path.clone();
@@ -296,7 +301,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                             sqlx::query(
                                 r#"INSERT INTO BlogPosts( name, alphanumeric_name, description, sha, content ) 
                                 VALUES ( $1, $2, $3, $4, $5 ) 
-                                ON CONFLICT (id) DO
+                                ON CONFLICT (alphanumeric_name) DO
                                 UPDATE SET 
                                     name = EXCLUDED.name,
                                     alphanumeric_name = EXCLUDED.alphanumeric_name,
