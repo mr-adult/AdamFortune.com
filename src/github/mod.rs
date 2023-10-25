@@ -1,4 +1,4 @@
-use std::{time::Duration, sync::Arc};
+use std::{time::Duration, sync::Arc, cmp::Ordering};
 
 use base64::Engine;
 use reqwest::{ClientBuilder, Client};
@@ -106,12 +106,9 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
     db_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
     github_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
 
-    let iterations = 
-        if db_repos.len() == 0 && github_repos.len() == 0 { 0 }
-        else if db_repos.len() > github_repos.len() { db_repos.len() }
-        else { github_repos.len() };
+    let max_iterations = github_repos.len() + db_repos.len();
 
-    let mut result = Vec::with_capacity(github_repos.len());
+    let mut result = Vec::new();
 
     let mut db_iter = db_repos.into_iter();
     let mut current_db_value = db_iter.next();
@@ -119,9 +116,10 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
     let mut current_github_value = github_iter.next();
 
     // resolve mismatches
-    for _ in 0..iterations {
+    for _ in 0..max_iterations {
         match &current_github_value {
             None => {
+                result.push((ModificationType::Upsert, current_db_value.expect("DB value to be Some() variant")));
                 for item in db_iter {
                     // no corresponding items in github. Delete them!
                     println!("Queued repo {} for deletion", item.name);
@@ -132,25 +130,29 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
             Some(github_val) => {
                 match &current_db_value {
                     None => {
-                        // no corresponding repo in DB. Add it!
+                        // no corresponding repos in DB. Add them!
                         println!("Queued repo {} for upsert", github_val.name);
-                        result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
-                        current_github_value = github_iter.next();
-                        continue;
+                        result.push((ModificationType::Upsert, current_github_value.expect("github repo to be Some() variant")));
+                        for item in github_iter {
+                            println!("Queued repo {} for upsert", item.name);
+                            result.push((ModificationType::Upsert, item));
+                        }
+                        break;
                     }
                     Some(db_value) => {
                         match github_val.id.cmp(&db_value.id) {
-                            std::cmp::Ordering::Less => {
+                            Ordering::Less => {
                                 println!("Queued repo {} for upsert", github_val.name);
                                 result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
                                 // move the github cursor.
                                 current_github_value = github_iter.next();
                             }
-                            std::cmp::Ordering::Equal => {
-                                if github_val.pushed_at > db_value.pushed_at {
+                            Ordering::Equal => {
+                                if github_val.pushed_at > db_value.pushed_at || github_val.name == "blog-posts" {
                                     println!("Queued repo {} for upsert", github_val.name);
                                     result.push((ModificationType::Upsert, current_github_value.expect("github value to be Some() variant")));
                                 } else {
+                                    println!("No changes to {}", github_val.name);
                                     result.push((ModificationType::None, current_github_value.expect("github value to be Some() variant")));
                                 }
                 
@@ -158,7 +160,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                 current_db_value = db_iter.next();
                                 current_github_value = github_iter.next();
                             }
-                            std::cmp::Ordering::Greater => {
+                            Ordering::Greater => {
                                 println!("Queued repo {} for delete", db_value.name);
                                 result.push((ModificationType::Delete, current_db_value.expect("db value to be Some() variant")));
                                 // move the db cursor.
@@ -185,6 +187,8 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                 .await
                 .ok()?;
 
+            let max_iterations = github_blog_posts.len() + db_read_mes.len();
+
             github_blog_posts.sort_by(|readme1, readme2| readme1.name.cmp(&readme2.name));
             db_read_mes.sort_by(|readme1, readme2| readme1.name.cmp(&readme2.name));
 
@@ -200,9 +204,12 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
             let mut current_github_value = github_iter.next();
         
             // resolve mismatches
-            for _ in 0..iterations {
+            for _ in 0..max_iterations {
                 match &current_github_value {
                     None => {
+                        let db_value = current_db_value.expect("DB value to be Some() variant");
+                        println!("Queued blog post {} for deletion", db_value.name);
+                        read_mes.push(BlogModificationType::Delete(db_value));
                         for item in db_iter {
                             // no corresponding items in github. Delete them!
                             println!("Queued blog post {} for deletion", item.name);
@@ -213,12 +220,15 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                     Some(github_val) => {
                         match &current_db_value {
                             None => {
-                                // no corresponding repo in DB. Add it!
                                 let path = github_val.path.clone();
-                                println!("Queued blog post {} for upsert", github_val.name);
-                                read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
-                                current_github_value = github_iter.next();
-                                continue;
+                                read_mes.push(BlogModificationType::Upsert((current_github_value.expect("github value to be Some() variant"), get_file_content_owned(&repo, &client, path))));
+                                for item in github_iter {
+                                    // no corresponding repo in DB. Add it!
+                                    let path = item.path.clone();
+                                    println!("Queued blog post {} for upsert", item.name);
+                                    read_mes.push(BlogModificationType::Upsert((item, get_file_content_owned(&repo, &client, path))));
+                                }
+                                break;
                             }
                             Some(db_value) => {
                                 match github_val.name.cmp(&db_value.name) {
@@ -235,6 +245,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                                             println!("Queued blog post {} for upsert", github_val.name);
                                             read_mes.push(BlogModificationType::Upsert((current_github_value.expect("current_github_value to be Some() variants"), get_file_content_owned(&repo, &client, path))));
                                         } else {
+                                            println!("No changes to {}", github_val.name);
                                             read_mes.push(BlogModificationType::None);
                                         }
                 
@@ -273,7 +284,7 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                             Some(content) => {
                                 for line in content.lines() {
                                     if line.starts_with("///") {
-                                        description_lines.push(line);
+                                        description_lines.push(line[3..].to_string());
                                     } else {
                                         content_lines.push(line);
                                     }
