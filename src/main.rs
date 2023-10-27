@@ -1,7 +1,7 @@
 use axum::{
     Router, 
     response::Html, 
-    routing::get, extract::{Path, State}
+    routing::{get, post}, extract::{Path, State}, Form
 };
 use github::{Repo, BlogPost};
 use pulldown_cmark::{
@@ -10,6 +10,7 @@ use pulldown_cmark::{
     html
 };
 use reqwest::{StatusCode, Method};
+use serde_derive::Deserialize;
 use sqlx::PgPool;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -105,6 +106,7 @@ pub async fn shuttle_main (
         .route("/projects/:project", get(project))
         .route("/blog", get(blog))
         .route("/blog/:blog", get(blog_post))
+        .route("/formatjson", post(format_json))
         .with_state(state.clone())
         .layer(cors);
 
@@ -158,7 +160,23 @@ async fn projects(State(state): State<AppState>) -> Html<String> {
 async fn project(State(state): State<AppState>, Path(project): Path<String>) -> Result<Html<String>, StatusCode> {
     match github::get_repo(&state, &project).await {
         None => Err(StatusCode::NOT_FOUND),
-        Some(repo) => {
+        Some(mut repo) => {
+            match repo.name.as_str() {
+                "json-formatter" => {
+                    if let Some(readme) = &mut repo.readme {
+                        *readme = readme.replace(
+                            "!Json Formatter Input Box Goes Here!", 
+                            r#"<form action="/formatjson" method="post">
+                                <label for="json">JSON:</label><br/>
+                                <textarea id="json" name="json" style="width:100%;min-height:200px;"></textarea><br/>
+                                <input type="submit" value="Submit">
+                            </form> "#
+                        );
+                    }
+                }
+                _ => {} // do nothing
+            }
+
             let mut html = create_html_page(false);
             html.push_str("<body onLoad='onLoad()'>");
             let mut additional_nav_bar_elements = 
@@ -169,13 +187,24 @@ async fn project(State(state): State<AppState>, Path(project): Path<String>) -> 
                     }
                 ];
 
-            if repo.name == "tree-iterators-rs" {
-                additional_nav_bar_elements.push(
-                    NavBarElement { 
-                        display_text: "Crates.io".to_string(), 
-                        href: "https://crates.io/crates/tree_iterators_rs".to_string() 
-                    }
-                )   
+            match repo.name.as_str() {
+                "tree-iterators-rs" => {
+                    additional_nav_bar_elements.push(
+                        NavBarElement { 
+                            display_text: "Crates.io".to_string(), 
+                            href: "https://crates.io/crates/tree_iterators_rs".to_string() 
+                        }
+                    )   
+                }
+                "json-formatter" => {
+                    additional_nav_bar_elements.push(
+                        NavBarElement { 
+                            display_text: "Crates.io".to_string(), 
+                            href: "https://crates.io/crates/toy-json-formatter".to_string() 
+                        }
+                    )                       
+                }
+                _ => {}
             }
 
             html.push_str(&create_nav_bar(Some(additional_nav_bar_elements)));
@@ -234,6 +263,13 @@ async fn blog_post(State(state): State<AppState>, Path(blog): Path<String>) -> R
             Ok(Html(html))
         }
     }
+}
+
+async fn format_json(json: Form<JsonFormData>) -> Html<String> {
+    let mut result = "<textarea style='height: 100%; width: 100%;'>".to_string();
+    result.push_str(&toy_json_formatter::format(&json.0.json));
+    result.push_str("</textarea>");
+    Html(result)
 }
 
 /// Creates an HTML page, adding the <head> tag that is needed. 
@@ -388,4 +424,9 @@ impl AppState {
             db_connection: pool,
         }
     }
+}
+
+#[derive(Deserialize)]
+struct JsonFormData {
+    json: String,
 }

@@ -119,7 +119,10 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
     for _ in 0..max_iterations {
         match &current_github_value {
             None => {
-                result.push((ModificationType::Upsert, current_db_value.expect("DB value to be Some() variant")));
+                if let Some(db_val) = current_db_value {
+                    println!("Queued repo {} for deletion", db_val.name);
+                    result.push((ModificationType::Delete, db_val));
+                }
                 for item in db_iter {
                     // no corresponding items in github. Delete them!
                     println!("Queued repo {} for deletion", item.name);
@@ -131,8 +134,10 @@ pub (crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                 match &current_db_value {
                     None => {
                         // no corresponding repos in DB. Add them!
-                        println!("Queued repo {} for upsert", github_val.name);
-                        result.push((ModificationType::Upsert, current_github_value.expect("github repo to be Some() variant")));
+                        if let Some(github_val) = current_github_value {
+                            println!("Queued repo {} for upsert", github_val.name);
+                            result.push((ModificationType::Upsert, github_val));
+                        }
                         for item in github_iter {
                             println!("Queued repo {} for upsert", item.name);
                             result.push((ModificationType::Upsert, item));
