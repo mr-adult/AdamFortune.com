@@ -267,7 +267,17 @@ async fn blog_post(State(state): State<AppState>, Path(blog): Path<String>) -> R
 
 async fn format_json(json: Form<JsonFormData>) -> Html<String> {
     let mut result = "<textarea style='height: 100%; width: 100%;'>".to_string();
-    result.push_str(&toy_json_formatter::format(&json.0.json));
+    let (formatted, errs) = toy_json_formatter::format(&json.0.json);
+    result.push_str(&formatted);
+
+    if let Some(errs) = errs {
+        result.push('\n');
+        result.push_str("Errors:\n");
+        for err in errs {
+            result.push_str(&format!("{}", err));
+            result.push('\n');
+        }
+    }
     result.push_str("</textarea>");
     Html(result)
 }
