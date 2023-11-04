@@ -167,6 +167,11 @@ async fn project(State(state): State<AppState>, Path(project): Path<String>) -> 
                         *readme = readme.replace(
                             "!Json Formatter Input Box Goes Here!", 
                             r#"<form action="/formatjson" method="post">
+                                <label for="type">JSON Type:</label><br/>
+                                <input type="radio" id="jsonStandard" name="format" value="Json Type:">
+                                <label for="jsonStandard">Standard JSON</label><br>
+                                <input type="radio" id="jsonLines" name="format" value="JsonLines">
+                                <label for="jsonLines">Json Lines Format</label><br>  
                                 <label for="json">JSON:</label><br/>
                                 <textarea id="json" name="json" style="width:100%;min-height:200px;"></textarea><br/>
                                 <input type="submit" value="Submit">
@@ -266,19 +271,32 @@ async fn blog_post(State(state): State<AppState>, Path(blog): Path<String>) -> R
 }
 
 async fn format_json(json: Form<JsonFormData>) -> Html<String> {
-    let mut result = "<textarea style='height: 100%; width: 100%;'>".to_string();
-    let (formatted, errs) = toy_json_formatter::format(&json.0.json);
-    result.push_str(&formatted);
+    let mut result = String::new();
 
-    if let Some(errs) = errs {
-        result.push('\n');
-        result.push_str("Errors:\n");
-        for err in errs {
-            result.push_str(&format!("{}", err));
-            result.push('\n');
+    let jsons;
+    match json.0.format {
+        JsonFormat::JsonLines => {
+            jsons = json.0.json.lines().collect();
+        }
+        JsonFormat::Json => {
+            jsons = vec![&json.0.json[..]];
         }
     }
-    result.push_str("</textarea>");
+    for json in jsons {
+        result.push_str("<textarea style='height: 50%; width: 100%;'>");
+        let (formatted, errs) = toy_json_formatter::format(json);
+        result.push_str(&formatted);
+
+        if let Some(errs) = errs {
+            result.push('\n');
+            result.push_str("Errors:\n");
+            for err in errs {
+                result.push_str(&format!("{}", err));
+                result.push('\n');
+            }
+        }
+        result.push_str("</textarea>");
+    }
     Html(result)
 }
 
@@ -438,5 +456,12 @@ impl AppState {
 
 #[derive(Deserialize)]
 struct JsonFormData {
+    format: JsonFormat,
     json: String,
+}
+
+#[derive(Deserialize)]
+enum JsonFormat {
+    Json,
+    JsonLines,
 }

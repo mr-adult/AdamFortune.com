@@ -2939,9 +2939,9 @@ checksum = "b6bc1c9ce2b5135ac7f93c72918fc37feb872bdc6a5533a8b85eb4b86bfdae52"
 
 [[package]]
 name = "toy-json-formatter"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e87d7769bcdf7252c772ab4b1672296d221deb260fe00110f2dff2a1f52c935f"
+checksum = "20ec7a980d9a30de82eb0a8f9258d751d7ed6537b1b201cf80644f9f88f550ec"
 
 [[package]]
 name = "tracing"
