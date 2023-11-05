@@ -168,7 +168,7 @@ async fn project(State(state): State<AppState>, Path(project): Path<String>) -> 
                             "!Json Formatter Input Box Goes Here!", 
                             r#"<form action="/formatjson" method="post">
                                 <label for="type">JSON Type:</label><br/>
-                                <input type="radio" id="jsonStandard" name="format" value="Json Type:">
+                                <input type="radio" id="jsonStandard" name="format" value="JsonStandard">
                                 <label for="jsonStandard">Standard JSON</label><br>
                                 <input type="radio" id="jsonLines" name="format" value="JsonLines">
                                 <label for="jsonLines">Json Lines Format</label><br>  
@@ -278,7 +278,7 @@ async fn format_json(json: Form<JsonFormData>) -> Html<String> {
         JsonFormat::JsonLines => {
             jsons = json.0.json.lines().collect();
         }
-        JsonFormat::Json => {
+        JsonFormat::JsonStandard => {
             jsons = vec![&json.0.json[..]];
         }
     }
@@ -462,6 +462,6 @@ struct JsonFormData {
 
 #[derive(Deserialize)]
 enum JsonFormat {
-    Json,
+    JsonStandard,
     JsonLines,
 }
