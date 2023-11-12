@@ -32,12 +32,11 @@ const ERROR_RESPONSE: &'static str = "Failed to reach database.";
 
 const ALL_PAGES_CSS: &'static str = r#"
 html, body {
-    margin: 0;
-    padding: 0;
-    border: 0;
-    outline: 0;
-    font-size: 100%;
-    vertical-align: baseline;
+    margin: 40px auto;
+    padding: 0 10px;
+    max-width: 650px;
+    line-height: 1.6;
+    font-size: 18px;
     background: #191919;
     color: #FFFFFF;
 }
@@ -143,7 +142,7 @@ async fn projects(State(state): State<AppState>) -> Html<String> {
             html.push_str("<body onLoad='onLoad()'>"); {
                 html.push_str(&create_nav_bar(None));
 
-                html.push_str("<ul style='display: grid;column-count: 2;column-gap: 20px;row-gap: 20px; margin-right: 30px'>");
+                html.push_str("<ul style='display: grid; column-count: 2; column-gap: 20px; row-gap: 20px; padding: 0px; word-break: break-word'>");
                 
                 for (i, repo) in data.iter().enumerate() {
                     html.push_str(&generate_repo_card(i, repo));
@@ -234,12 +233,13 @@ async fn project(State(state): State<AppState>, Path(project): Path<String>) -> 
 async fn blog(State(state): State<AppState>) -> Html<String> {
     match github::get_blog_posts(&state).await {
         None => Html(ERROR_RESPONSE.to_string()),
-        Some(data) => {
+        Some(mut data) => {
+            data.sort_by(|post1, post2| post2.description.cmp(&post1.description));
             let mut html = create_html_page(true);
             html.push_str("<body onLoad='onLoad()'>"); {
                 html.push_str(&create_nav_bar(None));
 
-                html.push_str("<ul style='display: grid;column-count: 2;column-gap: 20px;row-gap: 20px; margin-right: 30px'>");
+                html.push_str("<ul style='display: grid; column-count: 2; column-gap: 20px; row-gap: 20px; padding: 0px; word-break: break-word;'>");
                 
                 for (i, blog_post) in data.iter().enumerate() {
                     html.push_str(&generate_blog_card(i, blog_post));
@@ -380,7 +380,7 @@ fn create_nav_bar(additional_elements: Option<Vec<NavBarElement>>) -> String {
 
 fn generate_repo_card(index: usize, repo: &Repo) -> String {
     let mut html = String::new();
-    html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index / 2 + 1, index % 2 + 1)); {
+    html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index + 1, 1)); {
         html.push_str("<h2>"); {
             html.push_str(&format!("<a href='{}/projects/{}'>", INDEX_URL, get_url_safe_name(&repo.name))); {
                 html.push_str(&repo.name);
@@ -400,7 +400,7 @@ fn generate_repo_card(index: usize, repo: &Repo) -> String {
 
 fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
     let mut html = String::new();
-    html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index / 2 + 1, index % 2 + 1)); {
+    html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index + 1, 1)); {
         html.push_str("<h2>"); {
             html.push_str(&format!("<a href='{}/blog/{}'>", INDEX_URL, get_url_safe_name(&blog_post.name))); {
                 html.push_str(&blog_post.name);
