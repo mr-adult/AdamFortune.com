@@ -1527,6 +1527,7 @@ dependencies = [
  "shuttle-axum",
  "shuttle-runtime",
  "shuttle-secrets",
+ "shuttle-service",
  "shuttle-shared-db",
  "sqlx",
  "tokio",
