@@ -23,11 +23,6 @@ pub (crate) const ACCEPT_INVALID_CERTS: bool = false;
 #[cfg(debug_assertions)]
 pub (crate) const ACCEPT_INVALID_CERTS: bool = true;
 
-#[cfg(not(debug_assertions))]
-const INDEX_URL: &'static str = "https://adamfortunecom.shuttleapp.rs";
-#[cfg(debug_assertions)]
-const INDEX_URL: &'static str = "http://127.0.0.1:8000";
-
 const ERROR_RESPONSE: &'static str = "Failed to reach database.";
 
 const ALL_PAGES_CSS: &'static str = r#"
@@ -346,15 +341,15 @@ fn create_nav_bar(additional_elements: Option<Vec<NavBarElement>>) -> String {
             let buttons = [
                 NavBarElement { 
                     display_text: "Home".to_string(), 
-                    href: INDEX_URL.to_string() 
+                    href: "/".to_string()
                 }, 
                 NavBarElement { 
                     display_text: "Projects".to_string(), 
-                    href: format!("{}/projects", INDEX_URL) 
+                    href: "/projects".to_string() 
                 },
                 NavBarElement {
                     display_text: "Blog".to_string(),
-                    href: format!("{}/blog", INDEX_URL)
+                    href: "/blog".to_string()
                 }
             ].into_iter()
                 .chain(
@@ -382,7 +377,7 @@ fn generate_repo_card(index: usize, repo: &Repo) -> String {
     let mut html = String::new();
     html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index + 1, 1)); {
         html.push_str("<h2>"); {
-            html.push_str(&format!("<a href='{}/projects/{}'>", INDEX_URL, get_url_safe_name(&repo.name))); {
+            html.push_str(&format!("<a href='/projects/{}'>", get_url_safe_name(&repo.name))); {
                 html.push_str(&repo.name);
             }
             html.push_str("</a>");
@@ -402,7 +397,7 @@ fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
     let mut html = String::new();
     html.push_str(&format!("<li style='grid-row: {}; grid-column: {}'>", index + 1, 1)); {
         html.push_str("<h2>"); {
-            html.push_str(&format!("<a href='{}/blog/{}'>", INDEX_URL, get_url_safe_name(&blog_post.name))); {
+            html.push_str(&format!("<a href='/blog/{}'>", get_url_safe_name(&blog_post.name))); {
                 html.push_str(&blog_post.name);
             }
             html.push_str("</a>");
