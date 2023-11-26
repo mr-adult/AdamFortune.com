@@ -25,51 +25,9 @@ pub (crate) const ACCEPT_INVALID_CERTS: bool = true;
 
 const ERROR_RESPONSE: &'static str = "Failed to reach database.";
 
-const ALL_PAGES_CSS: &'static str = r#"
-html, body {
-    margin: 40px auto;
-    padding: 0 10px;
-    max-width: 650px;
-    line-height: 1.6;
-    font-size: 18px;
-    background: #191919;
-    color: #FFFFFF;
-}
-body {
-    padding: 0px 18px;
-}
-#navbar_list > li {
-    display: inline-block;
-    padding: 16px 0px;
-}
-#navbar_list > li > a {
-    color: #FFFFFF;
-    padding: 10px;
-    text-decoration: none;
-}
-a {
-    color: #daa214;
-}
-code {
-    max-width: 100%;
-    overflow: scroll;
-    display: inline-block;
-}
-h1 {
-    text-align: center;
-}
-"#;
+const ALL_PAGES_CSS: &'static str = include_str!("./index.css");
 
-const CONTENT_LIST_CSS: &'static str = r#"
-li {
-    list-style: none;
-}
-li:not(#navbar li) {
-    border: 1px solid #FFFFFF;
-    padding: 20px;
-    border-radius: 20px;
-}
-"#;
+const CONTENT_LIST_CSS: &'static str = include_str!("./content_list.css");
 
 const MARKDOWN_CSS: &'static str = r#"
 
@@ -300,19 +258,16 @@ async fn format_json(json: Form<JsonFormData>) -> Html<String> {
 fn create_html_page(is_content_list: bool) -> String {
     let mut html = String::from("<!DOCTYPE html>");
     html.push_str("<head>"); {
+        html.push_str(r#"
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/csharp.min.js"></script>
+"#);
         html.push_str("<script>"); {
-            html.push_str(
-                r#"
-                function onLoad() {
-                    mermaidNodes = document.querySelectorAll("pre > code.language-mermaid");
-                    // the formatter I'm using doesn't quite do what mermaid is expecting, so let's fix that by moving the class "mermaid" to the "pre" element.
-                    for (let i = 0; i < mermaidNodes.length; i++) {                            
-                        mermaidNodes[i].parentNode.classList.add("mermaid");
-                        mermaidNodes[i].parentNode.innerHTML = mermaidNodes[i].innerHTML;
-                    }
-                }
-                "#
-            )
+            html.push_str(include_str!("./onload.js"))
         }
         html.push_str("</script>");
         html.push_str("<script type='module'>"); {
@@ -337,7 +292,7 @@ fn create_html_page(is_content_list: bool) -> String {
 fn create_nav_bar(additional_elements: Option<Vec<NavBarElement>>) -> String {
     let mut html = String::new();
     html.push_str("<nav id='navbar'>"); {
-        html.push_str("<ul id='navbar_list' style='list-style: none; display: flex; flex-direction: row; justify-content: left; margin: 0px; padding: 0px;'>"); {
+        html.push_str("<ul id='navbar_list' style='list-style: none; display: flex; flex-direction: row; justify-content: space-around; margin: 0px; padding: 0px;'>"); {
             let buttons = [
                 NavBarElement { 
                     display_text: "Home".to_string(), 
