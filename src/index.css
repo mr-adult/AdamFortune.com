@@ -27,7 +27,6 @@ a {
 }
 code {
     max-width: 100%;
-    overflow: scroll;
     display: inline-block;
 }
 h1 {
