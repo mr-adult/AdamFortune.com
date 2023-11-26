@@ -1,3 +1,3 @@
 # adamfortune.com
 
-adamfortune.com is my portfolio website which you are probably viewing this from. It was built using the axum backend framework and plain html and css. To see the source code, navigate to [github](https://github.com/mr-adult/adamfortune.com). It lists my github projects as well as my blog.
+adamfortune.com is my portfolio website which you are probably viewing this from. It was built using the axum backend framework in Rust and plain html, css, and JavaScript. The website uses the github API to refresh my list of github projects and blog posts (loaded from the [blog-posts repo](https://github.com/mr-adult/blog-posts)) hourly. This ensures everything stays up-to-date with minimal maintenance on my end.
