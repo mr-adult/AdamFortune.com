@@ -120,7 +120,7 @@ async fn project(State(state): State<AppState>, Path(project): Path<String>) -> 
                             "!Json Formatter Input Box Goes Here!", 
                             r#"<form action="/formatjson" method="post">
                                 <label for="type">JSON Type:</label><br/>
-                                <input type="radio" id="jsonStandard" name="format" value="JsonStandard">
+                                <input type="radio" id="jsonStandard" name="format" value="JsonStandard" checked>
                                 <label for="jsonStandard">Standard JSON</label><br>
                                 <input type="radio" id="jsonLines" name="format" value="JsonLines">
                                 <label for="jsonLines">Json Lines Format</label><br>  
