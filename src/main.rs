@@ -1,7 +1,7 @@
 use axum::{
     Router, 
     response::Html, 
-    routing::{get, post}, extract::{Path, State}, Form
+    routing::{get, post}, extract::{Path, State, DefaultBodyLimit}, Form
 };
 use github::{Repo, BlogPost};
 use pulldown_cmark::{
@@ -60,7 +60,8 @@ pub async fn shuttle_main (
         .route("/blog/:blog", get(blog_post))
         .route("/formatjson", post(format_json))
         .with_state(state.clone())
-        .layer(cors);
+        .layer(cors)
+        .layer(DefaultBodyLimit::max(20_000_000_000)); // raise the limit to 20 GB
 
     Ok(app.into())
 }
