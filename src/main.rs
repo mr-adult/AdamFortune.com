@@ -66,7 +66,7 @@ pub async fn shuttle_main(
 }
 
 async fn index(State(state): State<AppState>) -> Html<String> {
-    match github::get_home(&state).await {
+    match github::get_home(state.clone()).await {
         None => Html(ERROR_RESPONSE.to_string()),
         Some(data) => {
             let mut html = create_html_page(false);
@@ -86,7 +86,7 @@ async fn index(State(state): State<AppState>) -> Html<String> {
 }
 
 async fn projects(State(state): State<AppState>) -> Html<String> {
-    match github::get_repos(&state).await {
+    match github::get_repos(state.clone()).await {
         None => Html(ERROR_RESPONSE.to_string()),
         Some(data) => {
             let mut html = create_html_page(true);
@@ -112,7 +112,7 @@ async fn project(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<Html<String>, StatusCode> {
-    match github::get_repo(&state, &project).await {
+    match github::get_repo(&state.clone(), &project).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(mut repo) => {
             match repo.name.as_str() {
@@ -176,7 +176,7 @@ async fn project(
 }
 
 async fn blog(State(state): State<AppState>) -> Html<String> {
-    match github::get_blog_posts(&state).await {
+    match github::get_blog_posts(state.clone()).await {
         None => Html(ERROR_RESPONSE.to_string()),
         Some(mut data) => {
             data.sort_by(|post1, post2| post2.description.cmp(&post1.description));
@@ -203,7 +203,7 @@ async fn blog_post(
     State(state): State<AppState>,
     Path(blog): Path<String>,
 ) -> Result<Html<String>, StatusCode> {
-    match github::get_blog_post(&state, &blog).await {
+    match github::get_blog_post(&state.clone(), &blog).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(blog_post) => {
             let mut html = create_html_page(false);

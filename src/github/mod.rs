@@ -15,8 +15,8 @@ use crate::{get_url_safe_name, AppState};
 const URL: &'static str = "https://api.github.com/";
 const USERNAME: &'static str = "mr-adult";
 
-pub(crate) async fn get_home(state: &AppState) -> Option<BlogPost> {
-    update_data_if_necessary(state).await;
+pub(crate) async fn get_home(state: AppState) -> Option<BlogPost> {
+    tokio::spawn(update_data_if_necessary(state.clone()));
 
     let result = sqlx::query_as::<_, BlogPost>(
         "SELECT * FROM BlogPosts WHERE alphanumeric_name='Home' LIMIT 1;",
@@ -28,12 +28,12 @@ pub(crate) async fn get_home(state: &AppState) -> Option<BlogPost> {
     Some(result)
 }
 
-pub(crate) async fn get_repos(state: &AppState) -> Option<Vec<Repo>> {
-    update_data_if_necessary(state).await;
+pub(crate) async fn get_repos(state: AppState) -> Option<Vec<Repo>> {
+    tokio::spawn(update_data_if_necessary(state.clone()));
     get_repos_from_db(state).await
 }
 
-async fn get_repos_from_db(state: &AppState) -> Option<Vec<Repo>> {
+async fn get_repos_from_db(state: AppState) -> Option<Vec<Repo>> {
     let result =
         sqlx::query_as::<_, Repo>("SELECT * FROM MrAdultRepositories ORDER BY alphanumeric_name;")
             .fetch_all(&state.db_connection)
@@ -44,7 +44,7 @@ async fn get_repos_from_db(state: &AppState) -> Option<Vec<Repo>> {
 }
 
 pub(crate) async fn get_repo(state: &AppState, name: &str) -> Option<Repo> {
-    update_data_if_necessary(state).await;
+    tokio::spawn(update_data_if_necessary(state.clone()));
 
     let result = sqlx::query_as::<_, Repo>(
         "SELECT * FROM MrAdultRepositories WHERE alphanumeric_name=$1 LIMIT 1;",
@@ -57,8 +57,8 @@ pub(crate) async fn get_repo(state: &AppState, name: &str) -> Option<Repo> {
     Some(result)
 }
 
-pub(crate) async fn get_blog_posts(state: &AppState) -> Option<Vec<BlogPost>> {
-    update_data_if_necessary(state).await;
+pub(crate) async fn get_blog_posts(state: AppState) -> Option<Vec<BlogPost>> {
+    tokio::spawn(update_data_if_necessary(state.clone()));
 
     let result = sqlx::query_as::<_, BlogPost>(
         "SELECT * FROM BlogPosts WHERE alphanumeric_name <> 'Home' ORDER BY alphanumeric_name;",
@@ -71,7 +71,7 @@ pub(crate) async fn get_blog_posts(state: &AppState) -> Option<Vec<BlogPost>> {
 }
 
 pub(crate) async fn get_blog_post(state: &AppState, name: &str) -> Option<BlogPost> {
-    update_data_if_necessary(state).await;
+    tokio::spawn(update_data_if_necessary(state.clone()));
 
     let result = sqlx::query_as::<_, BlogPost>(
         "SELECT * FROM BlogPosts WHERE alphanumeric_name=$1 LIMIT 1;",
@@ -84,9 +84,9 @@ pub(crate) async fn get_blog_post(state: &AppState, name: &str) -> Option<BlogPo
     Some(result)
 }
 
-pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
-    if !db_data_is_stale(state).await {
-        return Some(());
+pub(crate) async fn update_data_if_necessary(state: AppState) -> bool {
+    if !db_data_is_stale(&state).await {
+        return false;
     }
 
     let timeout = Duration::from_secs(5);
@@ -98,11 +98,17 @@ pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 
     let client = match client_result {
         Ok(inner) => Arc::new(inner),
-        Err(_) => return None,
+        Err(_) => return false,
     };
 
-    let mut db_repos = get_repos_from_db(state).await?;
-    let mut github_repos = fetch_github_repos(client.clone()).await.ok()?;
+    let mut db_repos = match get_repos_from_db(state.clone()).await {
+        None => return false,
+        Some(repos) => repos,
+    };
+    let mut github_repos = match fetch_github_repos(client.clone()).await.ok() {
+        None => return false,
+        Some(repos) => repos
+    };
 
     db_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
     github_repos.sort_by(|repo1, repo2| repo1.id.cmp(&repo2.id));
@@ -204,11 +210,17 @@ pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
         .filter(|repo_result| repo_result.0 != ModificationType::None)
     {
         if repo.1.name == "blog-posts" {
-            let mut github_blog_posts = get_all_md_files(&repo.1, &client).await?;
-            let mut db_read_mes = sqlx::query_as::<_, BlogPost>("SELECT * FROM BlogPosts;")
+            let mut github_blog_posts = match get_all_md_files(&repo.1, &client).await {
+                None => return false,
+                Some(read_mes) => read_mes,
+            };
+            let mut db_read_mes = match sqlx::query_as::<_, BlogPost>("SELECT * FROM BlogPosts;")
                 .fetch_all(&state.db_connection)
                 .await
-                .ok()?;
+                .ok() {
+                    None => return false,
+                    Some(read_mes) => read_mes,
+                };
 
             let max_iterations = github_blog_posts.len() + db_read_mes.len();
 
@@ -376,11 +388,12 @@ pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 
             future::join_all(blog_post_upsert_queries).await;
         } else {
+            let db_connection = state.db_connection.clone();
             match repo.0 {
                 ModificationType::Delete => repo_deletes.push(async move {
                     match sqlx::query(r#"DELETE FROM MrAdultRepositories WHERE id=$1"#)
                         .bind(repo.1.id)
-                        .execute(&state.db_connection)
+                        .execute(&db_connection)
                         .await
                     {
                         Ok(_) => {}
@@ -390,6 +403,7 @@ pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                 ModificationType::Upsert => {
                     let mut repo = repo.1;
                     let client = client.clone();
+                    let db_connection = state.db_connection.clone();
                     repo_modifications.push(async move {
                         repo.readme = get_read_me(&repo, &client).await;
 
@@ -414,7 +428,7 @@ pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
                             .bind(repo.description)
                             .bind(repo.pushed_at)
                             .bind(repo.readme)
-                            .execute(&state.db_connection)
+                            .execute(&db_connection)
                             .await {
                                 Ok(_) => {}
                                 Err(err) => println!("{}", err)
@@ -428,7 +442,7 @@ pub(crate) async fn update_data_if_necessary(state: &AppState) -> Option<()> {
 
     future::join_all(repo_deletes).await;
     future::join_all(repo_modifications).await;
-    Some(())
+    return true;
 }
 
 async fn db_data_is_stale(state: &AppState) -> bool {
