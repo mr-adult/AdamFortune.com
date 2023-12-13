@@ -2,14 +2,14 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     response::Html,
     routing::{get, post},
-    Form, Router,
+    Form, Router, Json,
 };
 use github::{BlogPost, Repo};
 use pulldown_cmark::{html, Options, Parser};
 use reqwest::{Method, StatusCode};
 use serde_derive::Deserialize;
 use sqlx::PgPool;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{cors::{Any, CorsLayer}, services::{ServeDir, ServeFile}};
 
 mod github;
 mod utils;
@@ -52,7 +52,8 @@ pub async fn shuttle_main(
     let state = AppState::new(pool);
 
     let app = Router::new()
-        .route("/", get(index))
+        .nest_service("/", ServeDir::new("./dist").fallback(ServeFile::new("./dist/index.html")))
+        .route("/home", get(home))
         .route("/projects", get(projects))
         .route("/projects/:project", get(project))
         .route("/blog", get(blog))
@@ -65,46 +66,17 @@ pub async fn shuttle_main(
     Ok(app.into())
 }
 
-async fn index(State(state): State<AppState>) -> Html<String> {
+async fn home(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     match github::get_home(state.clone()).await {
-        None => Html(ERROR_RESPONSE.to_string()),
-        Some(data) => {
-            let mut html = create_html_page(false);
-            html.push_str("<body onLoad='onLoad()'>");
-            {
-                html.push_str(&create_nav_bar(None));
-                html.push_str("<div style='margin-left:8px;'>");
-                {
-                    html.push_str(&parse_md_to_html(&data.content));
-                }
-                html.push_str("</div>");
-            }
-            html.push_str("</body>");
-            Html(html)
-        }
+        None => Err(StatusCode::INTERNAL_SERVER_ERROR), 
+        Some(data) => Ok(Html(parse_md_to_html(&data.content))),
     }
 }
 
-async fn projects(State(state): State<AppState>) -> Html<String> {
+async fn projects(State(state): State<AppState>) -> Result<Json<Vec<Repo>>, StatusCode> {
     match github::get_repos(state.clone()).await {
-        None => Html(ERROR_RESPONSE.to_string()),
-        Some(data) => {
-            let mut html = create_html_page(true);
-            html.push_str("<body onLoad='onLoad()'>");
-            {
-                html.push_str(&create_nav_bar(None));
-
-                html.push_str("<ul style='display: grid; column-count: 2; column-gap: 20px; row-gap: 20px; padding: 0px; word-break: break-word'>");
-
-                for (i, repo) in data.iter().enumerate() {
-                    html.push_str(&generate_repo_card(i, repo));
-                }
-
-                html.push_str("</ul>");
-            }
-            html.push_str("</body>");
-            Html(html)
-        }
+        None => Err(StatusCode::NOT_FOUND),
+        Some(data) => Ok(Json(data))
     }
 }
 
@@ -257,12 +229,6 @@ fn create_html_page(is_content_list: bool) -> String {
     html.push_str("<head>");
     {
         html.push_str(r#"
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/csharp.min.js"></script>
 "#);
         html.push_str("<script>");
         {
@@ -330,37 +296,7 @@ fn create_nav_bar(additional_elements: Option<Vec<NavBarElement>>) -> String {
     html
 }
 
-fn generate_repo_card(index: usize, repo: &Repo) -> String {
-    let mut html = String::new();
-    html.push_str(&format!(
-        "<li style='grid-row: {}; grid-column: {}'>",
-        index + 1,
-        1
-    ));
-    {
-        html.push_str("<h2>");
-        {
-            html.push_str(&format!(
-                "<a href='/projects/{}'>",
-                get_url_safe_name(&repo.name)
-            ));
-            {
-                html.push_str(&repo.name);
-            }
-            html.push_str("</a>");
-        }
-        html.push_str("</h2>");
-
-        html.push_str("<p>");
-        {
-            html.push_str(&repo.description);
-        }
-        html.push_str("</p>");
-    }
-    html.push_str("</li>");
-    html
-}
-
+// Share code with repo card maybe?
 fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
     let mut html = String::new();
     html.push_str(&format!(

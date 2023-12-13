@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>adamfortune.com</title>
+
+		<!-- syntax highlighting -->
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/csharp.min.js"></script>
+        <script>
+			function onLoad() {
+				hljs.highlightAll();
+
+				mermaidNodes = document.querySelectorAll("pre > code.language-mermaid");
+				// the formatter I'm using doesn't quite do what mermaid is expecting, so let's fix that by moving the class "mermaid" to the "pre" element.
+				for (let i = 0; i < mermaidNodes.length; i++) {                            
+					mermaidNodes[i].parentNode.classList.add("mermaid");
+					mermaidNodes[i].parentNode.innerHTML = mermaidNodes[i].innerHTML;
+				}
+			}
+		</script>
+ 
+        <script type='module'>import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'</script>
+	</head>
+	<body onLoad="onLoad()">
+		<div id="app"></div>
+		<script type="module" src="/src/index.tsx"></script>
+	</body>
+</html>
