@@ -17,9 +17,9 @@ export function App() {
 				<Router>
 					<Route path="/" component={Home} />
 					<Route path="/projects" component={Projects} />
-					<Route path="/projects/:project" component={Repo} />
-					<Route path="/blog" component={Blog} />
-					<Route path="/blog/:blogpost" component={BlogPost} />
+					<Route path="/projects/:project" component={Repo as any} />
+					<Route path="/blog" component={Blog as any} />
+					<Route path="/blog/:blogpost" component={BlogPost as any} />
 					<Route default component={NotFound} />
 				</Router>
 			</main>

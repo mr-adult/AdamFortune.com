@@ -8,6 +8,8 @@
 		"format": "npx @biomejs/biome format --write"
 	},
 	"dependencies": {
+		"highlight.js": "^11.9.0",
+		"mermaid": "^10.6.1",
 		"preact": "^10.13.1",
 		"preact-iso": "^2.3.2",
 		"preact-render-to-string": "^6.3.1"

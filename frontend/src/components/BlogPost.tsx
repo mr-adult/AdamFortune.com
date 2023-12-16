@@ -1,26 +1,34 @@
 import { useEffect, useState } from "preact/hooks";
 import { BlogPostDTO } from "../DTOs"
 import { NavBar } from "./NavBar";
+import { Component, render } from "preact";
+import { postProcessMD } from "../postProcessMD";
 
 type BlogPostProps = {
-    url_safe_name: string,
+    blogpost: string,
 }
 
-export function BlogPost(props: BlogPostProps) {
-    let [html, setHtml] = useState("");
-	useEffect(() => {
-		fetch(`/blog_json/${props.url_safe_name}`)
-			.then(response => response.json())
-			.then((post: BlogPostDTO) => {
-                    setHtml(post.content)
-			});
-	}, [props.url_safe_name])
-	return (
-		<>
-			<NavBar additional={[]} />
-			<div style='margin-left:8px;'>
-         		<div dangerouslySetInnerHTML={{__html: html}} />
-			</div>
-		</>
-	);
+export class BlogPost extends Component<BlogPostProps> {
+	componentDidUpdate(): void {
+		postProcessMD();
+	}
+
+	render() {
+	    let [html, setHtml] = useState("");
+		useEffect(() => {
+			fetch(`/blog_json/${this.props.blogpost}`)
+				.then(response => response.json())
+				.then((post: BlogPostDTO) => {
+	                    setHtml(post.content)
+				});
+		}, [])
+		return (
+			<>
+				<NavBar additional={[]} />
+				<div style='margin-left:8px;'>
+	         		<div dangerouslySetInnerHTML={{__html: html}} />
+				</div>
+			</>
+		);
+	}
 }
