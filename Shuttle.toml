@@ -1,1 +1,5 @@
 name = "adamfortunecom"
+
+assets = [
+    "dist/*"
+]
