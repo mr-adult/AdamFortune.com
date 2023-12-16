@@ -2,14 +2,15 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     response::Html,
     routing::{get, post},
-    Form, Router,
+    Form, Router, Json,
 };
 use github::{BlogPost, Repo};
 use pulldown_cmark::{html, Options, Parser};
 use reqwest::{Method, StatusCode};
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{cors::{Any, CorsLayer}, services::{ServeDir, ServeFile}};
+use html_to_string_macro::html;
 
 mod github;
 mod utils;
@@ -19,16 +20,6 @@ mod utils;
 pub(crate) const ACCEPT_INVALID_CERTS: bool = false;
 #[cfg(debug_assertions)]
 pub(crate) const ACCEPT_INVALID_CERTS: bool = true;
-
-const ERROR_RESPONSE: &'static str = "Failed to reach database.";
-
-const ALL_PAGES_CSS: &'static str = include_str!("./index.css");
-
-const CONTENT_LIST_CSS: &'static str = include_str!("./content_list.css");
-
-const MARKDOWN_CSS: &'static str = r#"
-
-"#;
 
 #[shuttle_runtime::main]
 pub async fn shuttle_main(
@@ -52,11 +43,12 @@ pub async fn shuttle_main(
     let state = AppState::new(pool);
 
     let app = Router::new()
-        .route("/", get(index))
-        .route("/projects", get(projects))
-        .route("/projects/:project", get(project))
-        .route("/blog", get(blog))
-        .route("/blog/:blog", get(blog_post))
+        .nest_service("/", ServeDir::new("./dist").fallback(ServeFile::new("./dist/index.html")))
+        .route("/home", get(home))
+        .route("/projects_json", get(projects))
+        .route("/projects_json/:project", get(project))
+        .route("/blog_json", get(blog))
+        .route("/blog_json/:blog", get(blog_post))
         .route("/formatjson", post(format_json))
         .with_state(state.clone())
         .layer(cors)
@@ -65,45 +57,68 @@ pub async fn shuttle_main(
     Ok(app.into())
 }
 
-async fn index(State(state): State<AppState>) -> Html<String> {
+async fn home(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     match github::get_home(state.clone()).await {
-        None => Html(ERROR_RESPONSE.to_string()),
-        Some(data) => {
-            let mut html = create_html_page(false);
-            html.push_str("<body onLoad='onLoad()'>");
-            {
-                html.push_str(&create_nav_bar(None));
-                html.push_str("<div style='margin-left:8px;'>");
-                {
-                    html.push_str(&parse_md_to_html(&data.content));
+        None => Err(StatusCode::INTERNAL_SERVER_ERROR), 
+        Some(data) => Ok(Html(parse_md_to_html(&data.content))),
+    }
+}
+
+#[derive(Serialize,Deserialize)]
+pub(crate) struct RepoDTO {
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) html_url: String,
+    pub(crate) description: String,
+    pub(crate) readme: Option<String>,
+    pub(crate) url_safe_name: String,
+    pub(crate) additional_nav_elements: Vec<NavBarElement>,
+}
+
+impl From<Repo> for RepoDTO {
+    fn from(value: Repo) -> Self {
+        Self {
+            additional_nav_elements: vec![
+                Some(NavBarElement {
+                    display_text: "Source Code".to_string(),
+                    href: value.html_url.to_string(),
+                }),
+                match value.name.as_str() {
+                    "tree-iterators-rs" => Some(NavBarElement {
+                        display_text: "Crates.io".to_string(),
+                        href: "https://crates.io/crates/tree_iterators_rs".to_string(),
+                    }),
+                    "json-formatter" => Some(NavBarElement {
+                        display_text: "Crates.io".to_string(),
+                        href: "https://crates.io/crates/toy-json-formatter".to_string(),
+                    }),
+                    _ => None,
                 }
-                html.push_str("</div>");
-            }
-            html.push_str("</body>");
-            Html(html)
+            ].into_iter()
+            .flat_map(|vec| vec)
+            .collect(),
+            url_safe_name: get_url_safe_name(&value.name),
+            id: value.id,
+            name: value.name,
+            url: value.url,
+            html_url: value.html_url,
+            description: value.description,
+            readme: if let Some(readme) = value.readme { 
+                Some(parse_md_to_html(&readme)) 
+            } else { 
+                None 
+            },
         }
     }
 }
 
-async fn projects(State(state): State<AppState>) -> Html<String> {
+async fn projects(State(state): State<AppState>) -> Result<Json<Vec<RepoDTO>>, StatusCode> {
+    println!("In projects");
     match github::get_repos(state.clone()).await {
-        None => Html(ERROR_RESPONSE.to_string()),
+        None => Err(StatusCode::NOT_FOUND),
         Some(data) => {
-            let mut html = create_html_page(true);
-            html.push_str("<body onLoad='onLoad()'>");
-            {
-                html.push_str(&create_nav_bar(None));
-
-                html.push_str("<ul style='display: grid; column-count: 2; column-gap: 20px; row-gap: 20px; padding: 0px; word-break: break-word'>");
-
-                for (i, repo) in data.iter().enumerate() {
-                    html.push_str(&generate_repo_card(i, repo));
-                }
-
-                html.push_str("</ul>");
-            }
-            html.push_str("</body>");
-            Html(html)
+            Ok(Json(data.into_iter().map(|repo| repo.into()).collect()))
         }
     }
 }
@@ -111,90 +126,64 @@ async fn projects(State(state): State<AppState>) -> Html<String> {
 async fn project(
     State(state): State<AppState>,
     Path(project): Path<String>,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<Json<RepoDTO>, StatusCode> {
     match github::get_repo(&state.clone(), &project).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(mut repo) => {
-            match repo.name.as_str() {
-                "json-formatter" => {
-                    if let Some(readme) = &mut repo.readme {
-                        *readme = readme.replace(
-                            "!Json Formatter Input Box Goes Here!", 
-                            r#"<form action="/formatjson" method="post">
-                                <label for="type">JSON Type:</label><br/>
-                                <input type="radio" id="jsonStandard" name="format" value="JsonStandard" checked>
-                                <label for="jsonStandard">Standard JSON</label><br>
-                                <input type="radio" id="jsonLines" name="format" value="JsonLines">
-                                <label for="jsonLines">Json Lines Format</label><br>  
-                                <label for="json">JSON:</label><br/>
-                                <textarea id="json" name="json" style="width:100%;min-height:200px;"></textarea><br/>
-                                <input type="submit" value="Submit">
-                            </form> "#
-                        );
-                    }
-                }
-                _ => {} // do nothing
-            }
-
-            let mut html = create_html_page(false);
-            html.push_str("<body onLoad='onLoad()'>");
-            let mut additional_nav_bar_elements = vec![NavBarElement {
-                display_text: "Source Code".to_string(),
-                href: repo.html_url,
-            }];
-
-            match repo.name.as_str() {
-                "tree-iterators-rs" => additional_nav_bar_elements.push(NavBarElement {
-                    display_text: "Crates.io".to_string(),
-                    href: "https://crates.io/crates/tree_iterators_rs".to_string(),
-                }),
-                "json-formatter" => additional_nav_bar_elements.push(NavBarElement {
-                    display_text: "Crates.io".to_string(),
-                    href: "https://crates.io/crates/toy-json-formatter".to_string(),
-                }),
-                _ => {}
-            }
-
-            html.push_str(&create_nav_bar(Some(additional_nav_bar_elements)));
-            match repo.readme {
-                None => {
-                    html.push_str("</body>");
-                    Ok(Html(html))
-                }
-                Some(readme) => {
-                    html.push_str("<div>");
-                    {
-                        html.push_str(&parse_md_to_html(&readme));
-                    }
-                    html.push_str("</div>");
-                    html.push_str("</body>");
-                    Ok(Html(html))
+            if let "json-formatter" = repo.name.as_str() {
+                if let Some(readme) = &mut repo.readme {
+                    *readme = readme.replace(
+                        "!Json Formatter Input Box Goes Here!", 
+                        &html!{<form action="/formatjson" method="post">
+                            <label for="type">"JSON Type:"</label><br/>
+                            <input type="radio" id="jsonStandard" name="format" value="JsonStandard" checked />
+                            <label for="jsonStandard">"Standard JSON"</label><br/>
+                            <input type="radio" id="jsonLines" name="format" value="JsonLines" />
+                            <label for="jsonLines">"Json Lines Format"</label><br/>  
+                            <label for="json">"JSON:"</label><br/>
+                            <textarea id="json" name="json" style="width:100%;min-height:200px;"></textarea><br/>
+                            <input type="submit" value="Submit" />
+                        </form>})
                 }
             }
+
+            Ok(Json(repo.into()))
         }
     }
 }
 
-async fn blog(State(state): State<AppState>) -> Html<String> {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct BlogPostDTO {
+    pub(crate) id: i32,
+    pub(crate) name: String,
+    pub(crate) alphanumeric_name: String,
+    pub(crate) sha: String,
+    pub(crate) description: String,
+    pub(crate) content: String,
+    pub(crate) url_safe_name: String,
+}
+
+impl From<BlogPost> for BlogPostDTO {
+    fn from(value: BlogPost) -> Self {
+        BlogPostDTO {
+            url_safe_name: get_url_safe_name(&value.name),
+            id: value.id,
+            name: value.name,
+            alphanumeric_name: value.alphanumeric_name,
+            sha: value.sha,
+            description: value.description,
+            content: parse_md_to_html(&value.content),
+        }
+    }
+}
+
+async fn blog(State(state): State<AppState>) -> Result<Json<Vec<BlogPostDTO>>, StatusCode> {
+    println!("In blog");
     match github::get_blog_posts(state.clone()).await {
-        None => Html(ERROR_RESPONSE.to_string()),
+        None => Err(StatusCode::NOT_FOUND),
         Some(mut data) => {
             data.sort_by(|post1, post2| post2.description.cmp(&post1.description));
-            let mut html = create_html_page(true);
-            html.push_str("<body onLoad='onLoad()'>");
-            {
-                html.push_str(&create_nav_bar(None));
-
-                html.push_str("<ul style='display: grid; column-count: 2; column-gap: 20px; row-gap: 20px; padding: 0px; word-break: break-word;'>");
-
-                for (i, blog_post) in data.iter().enumerate() {
-                    html.push_str(&generate_blog_card(i, blog_post));
-                }
-
-                html.push_str("</ul>");
-            }
-            html.push_str("</body>");
-            Html(html)
+            Ok(Json(data.into_iter().map(|post| post.into()).collect()))
         }
     }
 }
@@ -202,21 +191,11 @@ async fn blog(State(state): State<AppState>) -> Html<String> {
 async fn blog_post(
     State(state): State<AppState>,
     Path(blog): Path<String>,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<Json<BlogPostDTO>, StatusCode> {
+    println!("{}", format!("In blog post {blog}"));
     match github::get_blog_post(&state.clone(), &blog).await {
         None => Err(StatusCode::NOT_FOUND),
-        Some(blog_post) => {
-            let mut html = create_html_page(false);
-            html.push_str("<body onLoad='onLoad()'>");
-            html.push_str(&create_nav_bar(None));
-            html.push_str("<div>");
-            {
-                html.push_str(&parse_md_to_html(&blog_post.content));
-            }
-            html.push_str("</div>");
-            html.push_str("</body>");
-            Ok(Html(html))
-        }
+        Some(blog_post) => Ok(Json(blog_post.into()))
     }
 }
 
@@ -250,148 +229,6 @@ async fn format_json(json: Form<JsonFormData>) -> Html<String> {
     Html(result)
 }
 
-/// Creates an HTML page, adding the <head> tag that is needed.
-/// Callers should add the <body> tag and all inner content
-fn create_html_page(is_content_list: bool) -> String {
-    let mut html = String::from("<!DOCTYPE html>");
-    html.push_str("<head>");
-    {
-        html.push_str(r#"
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/csharp.min.js"></script>
-"#);
-        html.push_str("<script>");
-        {
-            html.push_str(include_str!("./onload.js"))
-        }
-        html.push_str("</script>");
-        html.push_str("<script type='module'>");
-        {
-            html.push_str("import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';");
-        }
-        html.push_str("</script>");
-
-        html.push_str("<style>");
-        {
-            html.push_str(ALL_PAGES_CSS);
-            if is_content_list {
-                html.push_str(CONTENT_LIST_CSS);
-            } else {
-                html.push_str(MARKDOWN_CSS);
-            }
-        }
-        html.push_str("</style>");
-    }
-    html.push_str("</head>");
-    html
-}
-
-fn create_nav_bar(additional_elements: Option<Vec<NavBarElement>>) -> String {
-    let mut html = String::new();
-    html.push_str("<nav id='navbar'>");
-    {
-        html.push_str("<ul id='navbar_list' style='list-style: none; display: flex; flex-direction: row; justify-content: space-around; margin: 0px; padding: 0px;'>");
-        {
-            let buttons = [
-                NavBarElement {
-                    display_text: "Home".to_string(),
-                    href: "/".to_string(),
-                },
-                NavBarElement {
-                    display_text: "Projects".to_string(),
-                    href: "/projects".to_string(),
-                },
-                NavBarElement {
-                    display_text: "Blog".to_string(),
-                    href: "/blog".to_string(),
-                },
-            ]
-            .into_iter()
-            .chain(additional_elements.into_iter().flat_map(|opt| opt));
-
-            for element in buttons {
-                html.push_str("<li>");
-                {
-                    html.push_str("<a href='");
-                    html.push_str(&element.href);
-                    html.push_str("'>");
-                    html.push_str(&element.display_text);
-                    html.push_str("</a>");
-                }
-            }
-        }
-        html.push_str("</ul>");
-    }
-    html.push_str("</nav>");
-    html
-}
-
-fn generate_repo_card(index: usize, repo: &Repo) -> String {
-    let mut html = String::new();
-    html.push_str(&format!(
-        "<li style='grid-row: {}; grid-column: {}'>",
-        index + 1,
-        1
-    ));
-    {
-        html.push_str("<h2>");
-        {
-            html.push_str(&format!(
-                "<a href='/projects/{}'>",
-                get_url_safe_name(&repo.name)
-            ));
-            {
-                html.push_str(&repo.name);
-            }
-            html.push_str("</a>");
-        }
-        html.push_str("</h2>");
-
-        html.push_str("<p>");
-        {
-            html.push_str(&repo.description);
-        }
-        html.push_str("</p>");
-    }
-    html.push_str("</li>");
-    html
-}
-
-fn generate_blog_card(index: usize, blog_post: &BlogPost) -> String {
-    let mut html = String::new();
-    html.push_str(&format!(
-        "<li style='grid-row: {}; grid-column: {}'>",
-        index + 1,
-        1
-    ));
-    {
-        html.push_str("<h2>");
-        {
-            html.push_str(&format!(
-                "<a href='/blog/{}'>",
-                get_url_safe_name(&blog_post.name)
-            ));
-            {
-                html.push_str(&blog_post.name);
-            }
-            html.push_str("</a>");
-        }
-        html.push_str("</h2>");
-
-        html.push_str("<p>");
-        {
-            html.push_str(&blog_post.description);
-        }
-        html.push_str("</p>");
-    }
-    html.push_str("</li>");
-    html
-}
-
 fn get_url_safe_name(name: &str) -> String {
     name.chars()
         .filter(|char| match char {
@@ -408,6 +245,7 @@ fn parse_md_to_html(md: &str) -> String {
     html_output
 }
 
+#[derive(Serialize, Deserialize)]
 struct NavBarElement {
     display_text: String,
     href: String,
