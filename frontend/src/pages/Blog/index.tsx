@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'preact/hooks';
-import { RepoDTO } from '../../DTOs';
+import { BlogPostDTO } from '../../DTOs';
 import { NavBar } from '../../components/NavBar';
 
-export function Projects() {
-    let [repos, setRepos] = useState<RepoDTO[]>([]);
+export function Blog() {
+    let [posts, setPosts] = useState<BlogPostDTO[]>([]);
 
     useEffect(() => {
-        fetch("/projects_json", {
+        fetch("/blog_json", {
             method: "GET",
         })
             .then((response) => response.json())
-            .then((data: RepoDTO[]) => {
-                setRepos(data);
+            .then((data: BlogPostDTO[]) => {
+                setPosts(data);
             })
             .catch((error) => console.log(error));
     }, []);
@@ -19,30 +19,30 @@ export function Projects() {
     let i = 0;
 	return (
         <>
-            <NavBar additional={[]} />
+			<NavBar additional={[]} />
             <ul className="contentList">
-                {repos.map(repo => {
-                    return <RepoCard repo={repo} index={++i} />
+                {posts.map(post => {
+                    return <BlogCard post={post} index={++i} />
                 })}
             </ul>
         </>
 	);
 }
 
-type RepoCardProps = {
-    repo: RepoDTO,
+type BlogCardProps = {
+    post: BlogPostDTO,
     index: number,
 }
 
-function RepoCard(props: RepoCardProps) {
+function BlogCard(props: BlogCardProps) {
     let style = `grid-row: ${props.index}; grid-column: 1;`
-    let href = `/projects/${props.repo.url_safe_name}`;
+    let href = `/blog_json/${props.post.url_safe_name}`;
     return (
         <li className="contentItem" style={style}>
             <h2>
-                <a href={href}>{props.repo.name}</a>
+                <a href={href}>{props.post.name}</a>
             </h2>
-            <p>{props.repo.description}</p>
+            <p>{props.post.description}</p>
         </li>
     );
 }

@@ -3,7 +3,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"build": "vite build --outDir ../dist",
+		"build": "vite build --outDir ../dist --emptyOutDir",
 		"preview": "vite preview",
 		"format": "npx @biomejs/biome format --write"
 	},

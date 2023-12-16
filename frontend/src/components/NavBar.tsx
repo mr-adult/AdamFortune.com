@@ -1,10 +1,11 @@
 import { useLocation } from 'preact-iso';
+import { NavBarElement } from '../DTOs';
 
 export type NavBarProps = {
     additional: NavBarButton[]
 }
 
-export type NavBarButton = {
+export interface NavBarButton extends NavBarElement {
     display_text: string,
     href: string,
 }

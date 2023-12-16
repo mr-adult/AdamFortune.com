@@ -1,6 +1,6 @@
-import './style.css';
 import { BlogPost } from '../../components/BlogPost';
+import { NavBar } from '../../components/NavBar';
 
 export function Home() {
-	return <BlogPost name="Home" />
+	return <BlogPost url_safe_name="Home" />
 }
