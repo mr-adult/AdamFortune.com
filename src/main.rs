@@ -2,7 +2,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     response::Html,
     routing::{get, post},
-    Form, Router, Json,
+    Router, Json,
 };
 use github::{BlogPost, Repo};
 use pulldown_cmark::{html, Options, Parser};
@@ -10,7 +10,6 @@ use reqwest::{Method, StatusCode};
 use serde_derive::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower_http::{cors::{Any, CorsLayer}, services::{ServeDir, ServeFile}};
-use html_to_string_macro::html;
 
 mod github;
 mod utils;
@@ -49,6 +48,7 @@ pub async fn shuttle_main(
         .route("/projects_json/:project", get(project))
         .route("/blog_json", get(blog))
         .route("/blog_json/:blog", get(blog_post))
+        .route("/parsejson", post(parse_json))
         .route("/formatjson", post(format_json))
         .with_state(state.clone())
         .layer(cors)
@@ -114,7 +114,6 @@ impl From<Repo> for RepoDTO {
 }
 
 async fn projects(State(state): State<AppState>) -> Result<Json<Vec<RepoDTO>>, StatusCode> {
-    println!("In projects");
     match github::get_repos(state.clone()).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(data) => {
@@ -129,26 +128,7 @@ async fn project(
 ) -> Result<Json<RepoDTO>, StatusCode> {
     match github::get_repo(&state.clone(), &project).await {
         None => Err(StatusCode::NOT_FOUND),
-        Some(mut repo) => {
-            if let "json-formatter" = repo.name.as_str() {
-                if let Some(readme) = &mut repo.readme {
-                    *readme = readme.replace(
-                        "!Json Formatter Input Box Goes Here!", 
-                        &html!{<form action="/formatjson" method="post">
-                            <label for="type">"JSON Type:"</label><br/>
-                            <input type="radio" id="jsonStandard" name="format" value="JsonStandard" checked />
-                            <label for="jsonStandard">"Standard JSON"</label><br/>
-                            <input type="radio" id="jsonLines" name="format" value="JsonLines" />
-                            <label for="jsonLines">"Json Lines Format"</label><br/>  
-                            <label for="json">"JSON:"</label><br/>
-                            <textarea id="json" name="json" style="width:100%;min-height:200px;"></textarea><br/>
-                            <input type="submit" value="Submit" />
-                        </form>})
-                }
-            }
-
-            Ok(Json(repo.into()))
-        }
+        Some(repo) => Ok(Json(repo.into()))
     }
 }
 
@@ -178,7 +158,6 @@ impl From<BlogPost> for BlogPostDTO {
 }
 
 async fn blog(State(state): State<AppState>) -> Result<Json<Vec<BlogPostDTO>>, StatusCode> {
-    println!("In blog");
     match github::get_blog_posts(state.clone()).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(mut data) => {
@@ -192,16 +171,13 @@ async fn blog_post(
     State(state): State<AppState>,
     Path(blog): Path<String>,
 ) -> Result<Json<BlogPostDTO>, StatusCode> {
-    println!("{}", format!("In blog post {blog}"));
     match github::get_blog_post(&state.clone(), &blog).await {
         None => Err(StatusCode::NOT_FOUND),
         Some(blog_post) => Ok(Json(blog_post.into()))
     }
 }
 
-async fn format_json(json: Form<JsonFormData>) -> Html<String> {
-    let mut result = String::new();
-
+async fn parse_json(json: Json<JsonFormData>) -> Json<String> {
     let jsons;
     match json.0.format {
         JsonFormat::JsonLines => {
@@ -211,22 +187,32 @@ async fn format_json(json: Form<JsonFormData>) -> Html<String> {
             jsons = vec![&json.0.json[..]];
         }
     }
-    for json in jsons {
-        result.push_str("<textarea style='height: 50%; width: 100%;'>");
-        let (formatted, errs) = toy_json_formatter::format(json);
-        result.push_str(&formatted);
 
-        if let Some(errs) = errs {
-            result.push('\n');
-            result.push_str("Errors:\n");
-            for err in errs {
-                result.push_str(&format!("{}", err));
-                result.push('\n');
+    let results = jsons.into_iter().map(|json| {
+        let result = toy_json_formatter::parse(json);
+        match result {
+            Ok(inner) => Ok(inner),
+            Err(_) => {
+                let result = toy_json_formatter::format(json);
+
+                let result_with_err_strings = (
+                    result.0,
+                    result.1.into_iter().map(|err| format!("{}", err)).collect::<Vec<_>>()
+                );
+
+                Err(result_with_err_strings)
             }
         }
-        result.push_str("</textarea>");
-    }
-    Html(result)
+
+    })
+    .collect::<Vec<_>>();
+
+    let json_string = serde_json::to_string(&results).expect("JSON value to always be JSON serializable.");
+    Json(json_string)
+}
+
+async fn format_json(json: Json<String>) -> Json<String> {
+    Json(toy_json_formatter::format(json.as_str()).0)
 }
 
 fn get_url_safe_name(name: &str) -> String {

@@ -73,8 +73,6 @@ pub(crate) async fn get_blog_posts(state: AppState) -> Option<Vec<BlogPost>> {
 pub(crate) async fn get_blog_post(state: &AppState, name: &str) -> Option<BlogPost> {
     tokio::spawn(update_data_if_necessary(state.clone()));
 
-    println!("kicked off update. Querying for {}...", get_url_safe_name(&name));
-
     let result;
     match sqlx::query_as::<_, BlogPost>(
         "SELECT * FROM BlogPosts WHERE alphanumeric_name=$1 LIMIT 1;",
