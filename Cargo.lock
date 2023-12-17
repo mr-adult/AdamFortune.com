@@ -2927,7 +2927,9 @@ checksum = "b6bc1c9ce2b5135ac7f93c72918fc37feb872bdc6a5533a8b85eb4b86bfdae52"
 
 [[package]]
 name = "toy-json-formatter"
-version = "0.1.9"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ee54601ef319c0bf136e57fa22add6fc2d41d52bb6607c4c5074aece413e860"
 dependencies = [
  "serde",
  "serde_derive",
