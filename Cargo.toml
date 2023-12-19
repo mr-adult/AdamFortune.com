@@ -22,7 +22,7 @@ shuttle-shared-db = { version = "0.35.0", features = ["postgres", "sqlx"] }
 sqlx = { version = "0.7", features = [ "runtime-tokio", "chrono", "macros"] }
 tower-http = { version = "0.4.4", features = ["cors", "fs"] }
 futures = "0.3.28"
-toy-json-formatter = { version = "0.2.0", features = ["serde"] }
+toy-json-formatter = { version = "0.2.1", features = ["serde"] }
 
 [env]
 OPENSSL_DIR = "/usr/include/"
