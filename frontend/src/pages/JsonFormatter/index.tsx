@@ -121,8 +121,8 @@ export function JsonValueExpander(props: JsonValueProps) {
 
         case props.value.type == "Array":
             return <span>
-                {"[]"}
                 <button onClick={() => setExpanded(!expanded)}>{expanded ? "-" : "+"}</button>
+                {expanded ? "[" : "[]"}
                 <div className="jsonValue" style={{borderLeft: "2px solid white"}}>
                     {props.value.value.map((val, i) => <div style={{display:expanded ? "" : "none"}}><JsonValueExpander value={val} />{(props.value as JsonArray).value.length - 1 !== i ? <br/> : ""}</div>)}
                 </div>
@@ -133,8 +133,8 @@ export function JsonValueExpander(props: JsonValueProps) {
             let keys = Object.keys(props.value.value);
             return <span>
                 <span>
-                    {"{}"}
                     <button onClick={() => setExpanded(!expanded)}>{expanded ? "-" : "+"}</button>
+                    {expanded ? "{" : "{}"}
                 </span>
                 {expanded ? <br/> : ""}
                 <div className="jsonValue" style={{borderLeft: "2px solid white"}}>
