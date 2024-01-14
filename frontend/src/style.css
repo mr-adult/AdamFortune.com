@@ -58,3 +58,8 @@ li.contentItem {
     padding: 20px;
     border-radius: 20px;
 }
+
+.jsonValue {
+    margin-left: 20px;
+    display: "inline";
+}

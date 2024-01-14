@@ -1,5 +1,0 @@
-name = "adamfortunecom"
-
-assets = [
-    "dist/*"
-]

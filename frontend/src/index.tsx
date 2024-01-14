@@ -9,6 +9,7 @@ import { Blog } from './pages/Blog/index.js';
 import './style.css';
 import { BlogPost } from './components/BlogPost.js';
 import { Repo } from './pages/Repo/index.js';
+import { JsonFormatter } from './pages/JsonFormatter/index.js';
 
 export function App() {
 	return (
@@ -17,6 +18,7 @@ export function App() {
 				<Router>
 					<Route path="/" component={Home} />
 					<Route path="/projects" component={Projects} />
+					<Route path="/projects/jsonformatter" component={JsonFormatter} />
 					<Route path="/projects/:project" component={Repo as any} />
 					<Route path="/blog" component={Blog as any} />
 					<Route path="/blog/:blogpost" component={BlogPost as any} />
